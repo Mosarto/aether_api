@@ -1,0 +1,4 @@
+Target test fixed: test_quota_blocks_at_limit
+Verification: PASS
+Command: $env:CEREBRAS_API_KEY='x'; $env:GROQ_API_KEY='x'; $env:GOOGLE_AI_API_KEY='x'; $env:QDRANT_API_KEY='x'; python -c "from app.test_battery import test_quota_blocks_at_limit; test_quota_blocks_at_limit(); print('PASS')"
+Notes: test asserts HTTPException 429 for free user at DAILY_QUOTA_FREE.

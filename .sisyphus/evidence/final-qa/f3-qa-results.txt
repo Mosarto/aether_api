@@ -1,0 +1,55 @@
+F3 — Real Manual QA Results
+Date: 2026-04-12
+Environment: Code inspection + ast.parse (no live server)
+
+=== SYNTAX CHECKS ===
+[1/5] test_battery.py     : PASS
+[2/5] user_profile.py     : PASS
+[3/5] conversations.py    : PASS
+[4/5] models.py           : PASS
+[5/5] main.py             : PASS
+Result: 5/5 files OK
+
+=== ENDPOINT LOGIC: DELETE /conversations/{session_id} ===
+[PASS] 404 when session not found
+  - L162-163: `if not meta: raise HTTPException(status_code=404, ...)`
+  - meta populated by qdrant.scroll filtering is_session_meta=True; empty list → 404
+[PASS] 403 on wrong user
+  - L169-170: `if session_user_id and session_user_id != user["uid"]: raise HTTPException(status_code=403, ...)`
+[PASS] 204 on success
+  - L212: `return Response(status_code=204)` (starlette.responses.Response imported L4)
+[PASS] Race protection: set_payload(processed=True) BEFORE delete loop
+  - L173-177: qdrant.set_payload called immediately after auth check
+  - Paginated turn deletion starts at L180
+  - Meta point deletion at L207-210 (last)
+Result: 4/4 checks PASS
+
+=== ENDPOINT LOGIC: GET /user/profile ===
+[PASS] 401 without auth
+  - L10: `user: dict = Depends(get_current_user)` — FastAPI auto-returns 401 if dep raises
+[PASS] 404 when profile missing
+  - L12-13: `if profile is None: raise HTTPException(status_code=404, ...)`
+[PASS] 200 on success
+  - L14: `return profile` — FastAPI serializes dict as 200 JSON
+Result: 3/3 checks PASS
+
+=== ROUTER REGISTRATION (main.py) ===
+[PASS] user_profile imported: L8 `from app.routes import ... user_profile`
+[PASS] user_profile.router included: L42 `app.include_router(user_profile.router)`
+[PASS] conversations.router included: L38 `app.include_router(conversations.router)`
+[PASS] DELETE method allowed in CORS: L31 `allow_methods=["GET", "POST", "DELETE"]`
+Result: 4/4 checks PASS
+
+=== MODEL VALIDATION (userId fields) ===
+[PASS] ChatRequest         — NO userId (fields: message, sessionId, reflectionId)
+[PASS] UserAnswer          — NO userId (fields: id, reflectionId, content, createdAt)
+[PASS] PromptGenerateRequest — NO userId (fields: title, description, categoryId)
+[PASS] SessionInfo         — HAS userId field (L59: userId: str = Field(max_length=128))
+Result: 4/4 checks PASS
+
+=== SUMMARY ===
+Syntax: 5/5 files OK
+Endpoint logic: 7/7 checks pass
+Model validation: 4/4 checks pass
+Router registration: 4/4 checks pass
+Scenarios 20/20 pass | VERDICT: APPROVE
