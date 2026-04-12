@@ -102,11 +102,11 @@ def test_toon_reflection_build():
         id=TEST_REFLECTION_ID,
         categoryId="gratidao",
         title="Gratidão Diária",
-        description="Reflexão sobre bençãos recebidas",
+        description="Reflexão sobre conquistas e momentos significativos",
         guidingQuestions=["Pelo que sou grato?", "Como posso servir?"],
-        scriptureReferences=["Alma 37:37", "D&C 78:19"],
+        scriptureReferences=["Marco Aurélio, Meditações VII.9", "Lao Tzu, Tao Te Ching 33"],
         semanticProfile=SemanticProfile(
-            keywords=["gratidão", "bençãos"],
+            keywords=["gratidão", "consciência"],
             emotionalTarget="reconhecimento",
             emotionalOutcome="paz interior",
             depthLevel="journaling",
@@ -121,7 +121,7 @@ def test_toon_reflection_build():
     assert "Gratidão Diária" in toon, "Título ausente no TOON"
     assert "Sistema" in toon, "Origem ausente no TOON"
     assert "gratidao" in toon, "Categoria ausente no TOON"
-    assert "Alma 37:37" in toon, "Escritura ausente no TOON"
+    assert "Marco Aurélio" in toon, "Referência ausente no TOON"
     assert "gratidão" in toon, "Keyword ausente no TOON"
     assert len(toon) > 100, f"TOON muito curto: {len(toon)} chars"
 
@@ -299,7 +299,7 @@ def test_prompt_generate_fill_defaults_empty():
 def test_prompt_generate_fill_defaults_valid():
     raw = {
         "guidingQuestions": ["Pergunta 1?", "Pergunta 2?"],
-        "scriptureReferences": ["Alma 36:3"],
+        "scriptureReferences": ["Epicteto, Manual 8"],
         "reflection": "Uma reflexão profunda.",
         "estimatedMinutes": 8,
         "semanticProfile": {
@@ -360,7 +360,7 @@ def test_user_profile_model():
         personality_summary="Pai dedicado",
         emotional_state="Ansioso mas esperançoso",
         recurring_themes=["família", "trabalho"],
-        spiritual_progress="Lendo escrituras diariamente",
+        spiritual_progress="Explorando práticas de autoconsciência",
         version=3,
         conversation_count=5,
     )
@@ -383,7 +383,7 @@ def test_profile_toon_build():
         "personality_summary": "Pessoa reflexiva e esforçada",
         "emotional_state": "Em busca de paz interior",
         "recurring_themes": ["família", "trabalho", "fé"],
-        "spiritual_progress": "Começando a estudar escrituras",
+        "spiritual_progress": "Iniciando práticas de presença e reflexão",
     }
     toon = build_profile_toon(profile)
     assert "Nome: Maria Santos" in toon, "display_name ausente no TOON"
@@ -722,11 +722,11 @@ def test_qdrant_index_reflection():
         id=TEST_REFLECTION_ID,
         categoryId="gratidao",
         title="Gratidão Diária",
-        description="Reflexão sobre bençãos recebidas",
+        description="Reflexão sobre conquistas e momentos significativos",
         guidingQuestions=["Pelo que sou grato?"],
-        scriptureReferences=["Alma 37:37"],
+        scriptureReferences=["Marco Aurélio, Meditações VII.9"],
         semanticProfile=SemanticProfile(
-            keywords=["gratidão", "bençãos"],
+            keywords=["gratidão", "consciência"],
             emotionalTarget="reconhecimento",
             emotionalOutcome="paz interior",
         ),

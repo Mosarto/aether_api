@@ -106,7 +106,7 @@ def create_initial_profile(user_id: str, firebase_data: dict) -> dict:
         "personality_summary": "",
         "emotional_state": "",
         "recurring_themes": [],
-        "spiritual_progress": "início da jornada",
+        "spiritual_progress": "início do despertar",
         "version": 1,
         "conversation_count": 0,
     }

@@ -8,7 +8,7 @@ from app.rate_limit import RateLimitExceeded
 from app.routes import reflections, answers, chat, health, conversations, prompts, ai_tools, user_profile
 
 app = FastAPI(
-    title="Jornada Celestial API",
+    title="Aether API",
     version="0.6.0",
     docs_url="/docs" if DEBUG else None,
     lifespan=lifespan,

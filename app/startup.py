@@ -100,7 +100,7 @@ def _check_embedding_model():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Jornada Celestial v%s", API_VERSION)
+    logger.info("🚀 Aether v%s", API_VERSION)
 
     _check_env_vars()
     _check_qdrant()

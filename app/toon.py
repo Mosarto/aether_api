@@ -45,7 +45,7 @@ def build_profile_toon(profile: dict) -> str:
     themes_str = ", ".join(themes) if themes else "nenhum identificado"
     personality = profile.get("personality_summary", "") or "ainda não definido"
     emotional = profile.get("emotional_state", "") or "não avaliado"
-    spiritual = profile.get("spiritual_progress", "") or "início da jornada"
+    spiritual = profile.get("spiritual_progress", "") or "início do despertar"
 
     return f"""Perfil:
   Nome: {name}
