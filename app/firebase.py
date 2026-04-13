@@ -173,6 +173,17 @@ def save_summary_to_firestore(uid: str, summary: dict) -> str | None:
             "tool": summary.get("tool", ""),
             "createdAt": firestore.SERVER_TIMESTAMP,
         }
+
+        # Enriched akashic fields (optional — backward compatible)
+        if summary.get("mood"):
+            payload["mood"] = summary["mood"]
+        if summary.get("emotionalIntensity") is not None:
+            payload["emotionalIntensity"] = summary["emotionalIntensity"]
+        if summary.get("keyInsight"):
+            payload["keyInsight"] = summary["keyInsight"]
+        if summary.get("turnCount") is not None:
+            payload["turnCount"] = summary["turnCount"]
+
         _, doc_ref = db.collection("users").document(uid).collection("summaries").add(payload)
         return doc_ref.id
     except Exception as e:

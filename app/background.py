@@ -5,13 +5,15 @@ from qdrant_client.http import models as qmodels
 
 from app.config import (
     COL_CONVERSATIONS, SESSION_TTL_HOURS,
-    PROFILE_JOB_INTERVAL_MINUTES, logger,
+    PROFILE_JOB_INTERVAL_MINUTES, COMPRESSION_MIN_TURNS, logger,
 )
 from app.providers import qdrant
 from app.profile import (
     ensure_profiles_collection, fetch_user_profile,
     upsert_user_profile, compress_history, extract_profile_updates,
+    extract_akashic_metadata,
 )
+from app.firebase import save_summary_to_firestore
 
 
 def _find_expired_unprocessed_sessions() -> list[dict]:
@@ -103,6 +105,19 @@ def process_finalized_sessions():
             if not summary:
                 _mark_session_processed(point_id, "")
                 continue
+
+            # Save akashic record to Firestore (only for meaningful sessions)
+            if len(turns) >= COMPRESSION_MIN_TURNS:
+                akashic_meta = extract_akashic_metadata(summary, len(turns))
+                akashic_payload = {
+                    "title": "",
+                    "snippet": summary,
+                    "tags": [],
+                    "date": datetime.now(timezone.utc).isoformat(),
+                    "tool": "session_summary",
+                    **akashic_meta,
+                }
+                save_summary_to_firestore(user_id, akashic_payload)
 
             current_profile = fetch_user_profile(user_id)
             updates = extract_profile_updates(current_profile, summary)
