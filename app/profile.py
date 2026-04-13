@@ -6,7 +6,7 @@ from qdrant_client.http import models as qmodels
 
 from app.config import (
     COL_USER_PROFILES, COMPRESSION_PROMPT, PROFILE_EXTRACTION_PROMPT,
-    GENDER_INFERENCE_PROMPT, deterministic_uuid, logger,
+    GENDER_INFERENCE_PROMPT, AKASHIC_METADATA_PROMPT, deterministic_uuid, logger,
 )
 from app.providers import qdrant, llm_create
 
@@ -199,3 +199,63 @@ def extract_profile_updates(current_profile: dict | None, conversation_summary: 
     except Exception as e:
         logger.warning("extract_profile falhou: %s", e)
         return {}
+
+
+VALID_MOODS = {"sereno", "ansioso", "esperançoso", "catártico", "melancólico", "empoderado"}
+
+
+def extract_akashic_metadata(summary: str, turn_count: int) -> dict:
+    """Extract mood, emotional intensity, and key insight from a conversation summary.
+
+    Returns at minimum {"turnCount": turn_count}. On success also includes
+    mood, emotionalIntensity, and keyInsight.
+    """
+    base = {"turnCount": turn_count}
+
+    if not summary:
+        return base
+
+    try:
+        content, label = llm_create(
+            messages=[
+                {"role": "system", "content": AKASHIC_METADATA_PROMPT},
+                {"role": "user", "content": f"Resumo da conversa:\n{summary}"},
+            ],
+            temperature=0.3,
+            max_tokens=200,
+        )
+        logger.debug("akashic metadata extraído (%s): %d chars", label, len(content))
+
+        clean = content.strip()
+        if clean.startswith("```"):
+            first_nl = clean.index("\n") if "\n" in clean else 3
+            clean = clean[first_nl + 1:]
+            if clean.endswith("```"):
+                clean = clean[:-3]
+            clean = clean.strip()
+
+        result = json.loads(clean)
+
+        mood = result.get("mood", "")
+        if mood not in VALID_MOODS:
+            mood = "sereno"
+
+        intensity = result.get("emotionalIntensity", 0.5)
+        try:
+            intensity = float(intensity)
+            intensity = max(0.0, min(1.0, intensity))
+        except (TypeError, ValueError):
+            intensity = 0.5
+
+        key_insight = result.get("keyInsight", "")
+        if not isinstance(key_insight, str):
+            key_insight = ""
+
+        base["mood"] = mood
+        base["emotionalIntensity"] = round(intensity, 2)
+        base["keyInsight"] = key_insight
+        return base
+
+    except Exception as e:
+        logger.warning("extract_akashic_metadata falhou: %s", e)
+        return base

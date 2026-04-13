@@ -201,6 +201,25 @@ DAILY_QUOTA_FREE = 5
 DAILY_QUOTA_PREMIUM = -1  # unlimited
 QUOTA_TIMEZONE = "America/Sao_Paulo"
 
+AKASHIC_METADATA_PROMPT = (
+    "Você é um extrator de metadados emocionais do Aether. Receba o resumo de uma conversa e produza "
+    "um JSON com a leitura energética e emocional dessa interação.\n\n"
+    "Campos obrigatórios:\n"
+    '- "mood": tom emocional dominante — DEVE ser exatamente um destes valores: '
+    '"sereno", "ansioso", "esperançoso", "catártico", "melancólico", "empoderado".\n'
+    '- "emotionalIntensity": float de 0.0 a 1.0 representando a intensidade emocional geral '
+    "(0.0 = neutro/leve, 1.0 = intenso/profundo).\n"
+    '- "keyInsight": a percepção ou realização mais importante da conversa, em UMA frase curta '
+    "em Português do Brasil. Se não houver insight claro, resuma o tema central.\n\n"
+    "Regras:\n"
+    "1. Baseie-se APENAS no resumo fornecido. NÃO invente informações.\n"
+    "2. mood DEVE ser exatamente um dos 6 valores listados, sem variações.\n"
+    "3. emotionalIntensity DEVE ser um número decimal entre 0.0 e 1.0.\n"
+    "4. keyInsight DEVE ter no máximo 1 frase.\n"
+    "5. Responda APENAS com JSON válido, sem markdown, sem explicações.\n\n"
+    'Formato: {"mood": "...", "emotionalIntensity": 0.0, "keyInsight": "..."}'
+)
+
 AI_TOOL_MAX_CONTENT_LENGTH = 8000
 AI_TOOL_LLM_MAX_TOKENS = 800
 AI_TOOL_LLM_TEMPERATURE = 0.7
@@ -218,7 +237,11 @@ DREAM_ANALYSIS_PROMPT = (
     "O campo snippet deve ser um parágrafo analítico detalhado, em Português do Brasil, com a leitura do sonho, "
     "incluindo interpretação dos símbolos, nuances emocionais, padrões que se repetem e uma síntese do significado "
     "percebido. O campo tags deve conter até 8 termos curtos, ligados aos temas, símbolos ou forças "
-    "mais relevantes do sonho. Não use markdown. Responda APENAS com um JSON válido."
+    "mais relevantes do sonho. Não use markdown. Responda APENAS com um JSON válido "
+    "no formato '{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [...], "
+    "\"mood\": \"...\", \"emotionalIntensity\": 0.0, \"keyInsight\": \"...\"}'. "
+    "mood deve ser exatamente: 'sereno', 'ansioso', 'esperançoso', 'catártico', 'melancólico' ou 'empoderado'. "
+    "emotionalIntensity é float 0.0–1.0. keyInsight é UMA frase com a percepção mais importante."
 )
 
 AURA_READING_PROMPT = (
@@ -233,7 +256,11 @@ AURA_READING_PROMPT = (
     "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [\"...\", ...]}'. O title deve ser curto e luminoso. O snippet "
     "deve descrever a energia percebida, os insights emocionais, e práticas sugeridas para alinhamento. "
     "As tags devem ter até 8 itens e representar qualidades energéticas, estados internos ou práticas simbólicas. "
-    "Não use markdown. Responda APENAS com um JSON válido."
+    "Não use markdown. Responda APENAS com um JSON válido "
+    "no formato '{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [...], "
+    "\"mood\": \"...\", \"emotionalIntensity\": 0.0, \"keyInsight\": \"...\"}'. "
+    "mood deve ser exatamente: 'sereno', 'ansioso', 'esperançoso', 'catártico', 'melancólico' ou 'empoderado'. "
+    "emotionalIntensity é float 0.0–1.0. keyInsight é UMA frase com a percepção mais importante."
 )
 
 STOIC_ADVICE_PROMPT = (
@@ -245,7 +272,11 @@ STOIC_ADVICE_PROMPT = (
     "dia a dia, especialmente coragem, temperança, justiça e sabedoria, sem soar acadêmico demais. O tom deve ser "
     "sereno, direto e elevado, como alguém que aprendeu a enfrentar a vida sem se quebrar e entende as leis do universo. Evite clichês de "
     "autoajuda e não faça perguntas terapêuticas. Responda APENAS com um JSON válido no formato "
-    "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [\"...\", ...]}'. O title deve ser curto e filosófico. O snippet deve ser um parágrafo em Português do Brasil com conselho prático, leitura estoica da situação, referência natural aos mestres estoicos quando fizer sentido e um deslocamento de perspectiva que ajude o usuário a agir com virtude. As tags devem ter até 8 termos curtos ligados a estoicismo, virtude, disciplina, controle e perspectiva. Não use markdown. Responda APENAS com um JSON válido."
+    "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [\"...\", ...]}'. O title deve ser curto e filosófico. O snippet deve ser um parágrafo em Português do Brasil com conselho prático, leitura estoica da situação, referência natural aos mestres estoicos quando fizer sentido e um deslocamento de perspectiva que ajude o usuário a agir com virtude. As tags devem ter até 8 termos curtos ligados a estoicismo, virtude, disciplina, controle e perspectiva. "
+    "Inclua também: mood (exatamente: 'sereno', 'ansioso', 'esperançoso', 'catártico', 'melancólico' ou 'empoderado'), "
+    "emotionalIntensity (float 0.0–1.0) e keyInsight (UMA frase com a percepção mais importante). "
+    "Não use markdown. Responda APENAS com um JSON válido no formato "
+    "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [...], \"mood\": \"...\", \"emotionalIntensity\": 0.0, \"keyInsight\": \"...\"}'."
 )
 
 SYNCHRONICITY_PROMPT = (
@@ -256,5 +287,9 @@ SYNCHRONICITY_PROMPT = (
     "certezas absolutas. Considere a sincronicidade como convite à reflexão: o que parece estar se alinhando, o que se "
     "repete, o que chama atenção e que tipo de orientação cósmica isso sugere. O tom deve ser contemplativo, místico e sóbrio, "
     "sem sensacionalismo e sem inventar fatos. Responda APENAS com um JSON válido no formato "
-    "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [\"...\", ...]}'. O title deve ser breve e evocativo. O snippet deve trazer uma análise detalhada das conexões percebidas, do significado simbólico possível e das implicações práticas ou de alinhamento dessa leitura. As tags devem ter até 8 itens e representar padrões, símbolos, temas ou direções de sentido. Não use markdown. Responda APENAS com um JSON válido."
+    "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [\"...\", ...]}'. O title deve ser breve e evocativo. O snippet deve trazer uma análise detalhada das conexões percebidas, do significado simbólico possível e das implicações práticas ou de alinhamento dessa leitura. As tags devem ter até 8 itens e representar padrões, símbolos, temas ou direções de sentido. "
+    "Inclua também: mood (exatamente: 'sereno', 'ansioso', 'esperançoso', 'catártico', 'melancólico' ou 'empoderado'), "
+    "emotionalIntensity (float 0.0–1.0) e keyInsight (UMA frase com a percepção mais importante). "
+    "Não use markdown. Responda APENAS com um JSON válido no formato "
+    "'{\"title\": \"...\", \"snippet\": \"...\", \"tags\": [...], \"mood\": \"...\", \"emotionalIntensity\": 0.0, \"keyInsight\": \"...\"}'."
 )
