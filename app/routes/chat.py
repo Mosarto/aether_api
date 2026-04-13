@@ -132,7 +132,8 @@ def _ensure_collection():
 async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     try:
         await check_rate_limit(user["uid"])
-        await check_quota(user)
+        quota_info = await check_quota(user)
+        quota_remaining = quota_info.get("remaining")
         session_id = req.sessionId or str(uuid4())
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -294,6 +295,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
             followUp=follow_ups[:3],
             sessionId=session_id,
             sessionTitle=session_title,
+            remaining=quota_remaining,
         )
     except HTTPException:
         raise

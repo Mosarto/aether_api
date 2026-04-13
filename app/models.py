@@ -52,6 +52,7 @@ class ChatResponse(BaseModel):
     model: str = Field(max_length=100)
     contextSources: int
     followUp: list[str] = []
+    remaining: int | None = Field(default=None, ge=0)
 
 
 class SessionInfo(BaseModel):
