@@ -90,6 +90,40 @@ async def check_and_reserve_quota(user: dict) -> dict:
 check_quota = check_and_reserve_quota
 
 
+async def get_quota_remaining(user: dict) -> dict:
+    """
+    Read-only quota check — returns remaining messages without incrementing.
+
+    Used by the app on startup to sync the FreemiumService counter
+    before the user sends any message.
+    """
+    if user.get("subscription_tier") == "premium":
+        return {"remaining": DAILY_QUOTA_PREMIUM}
+
+    uid = user["uid"]
+    db = get_firestore_db()
+    if not db:
+        logger.warning("Firestore indisponível para quota read, retornando max")
+        return {"remaining": DAILY_QUOTA_FREE}
+
+    today = _today_brt()
+    quota_ref = db.collection("users").document(uid).collection("quota").document("daily")
+
+    try:
+        snapshot = quota_ref.get()
+        used = 0
+        if snapshot.exists:
+            data = snapshot.to_dict() or {}
+            if data.get("date") == today:
+                used = int(data.get("used", 0))
+        remaining = max(DAILY_QUOTA_FREE - used, 0)
+    except Exception as e:
+        logger.warning("Falha ao ler quota do usuário %s: %s", uid, e)
+        return {"remaining": DAILY_QUOTA_FREE}
+
+    return {"remaining": remaining}
+
+
 async def increment_quota(uid: str) -> None:
     """
     No-op. Quota is now reserved atomically in check_and_reserve_quota().
