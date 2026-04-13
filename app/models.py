@@ -125,3 +125,6 @@ class AIToolResponse(BaseModel):
     tags: list[str] = []
     date: datetime
     tool: str = Field(max_length=50)
+    mood: str | None = Field(default=None, max_length=30)
+    emotionalIntensity: float | None = Field(default=None, ge=0.0, le=1.0)
+    keyInsight: str | None = Field(default=None, max_length=500)

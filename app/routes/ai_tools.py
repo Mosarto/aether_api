@@ -139,7 +139,22 @@ async def _process_ai_tool(
         tags=parsed.get("tags", [])[:8],
         date=datetime.now(timezone.utc),
         tool=tool_name,
+        mood=parsed.get("mood"),
+        emotionalIntensity=parsed.get("emotionalIntensity"),
+        keyInsight=parsed.get("keyInsight"),
     )
+
+    # Validate mood
+    valid_moods = {"sereno", "ansioso", "esperançoso", "catártico", "melancólico", "empoderado"}
+    if response.mood and response.mood not in valid_moods:
+        response.mood = "sereno"
+
+    # Clamp intensity
+    if response.emotionalIntensity is not None:
+        try:
+            response.emotionalIntensity = round(max(0.0, min(1.0, float(response.emotionalIntensity))), 2)
+        except (TypeError, ValueError):
+            response.emotionalIntensity = None
 
     try:
         save_summary_to_firestore(user["uid"], {
@@ -148,6 +163,9 @@ async def _process_ai_tool(
             "tags": response.tags,
             "date": response.date.isoformat(),
             "tool": response.tool,
+            "mood": response.mood,
+            "emotionalIntensity": response.emotionalIntensity,
+            "keyInsight": response.keyInsight,
         })
     except Exception as e:
         logger.warning("Falha ao salvar summary %s: %s", tool_name, e)
