@@ -45,7 +45,7 @@ def retrieve_context(
     return memories, recommendations
 
 
-def build_llm_prompt(user_query: str, memories: list, recommendations: list, has_history: bool = False) -> str:
+def build_llm_prompt(user_query: str, memories: list, recommendations: list, has_history: bool = False, turn_count: int = 0) -> str:
     mem_block = ""
     if memories:
         n = len(memories)
@@ -69,16 +69,29 @@ def build_llm_prompt(user_query: str, memories: list, recommendations: list, has
 
     has_context = bool(mem_block or rec_block)
 
+    # Sinais de contexto para a Nyx avaliar se já tem a pintura completa
+    signals = []
+    signals.append(f"trocas_nesta_conversa: {turn_count // 2}")
+    signals.append(f"tem_perfil: {'sim' if has_history else 'acima'}")
+    signals.append(f"memorias_encontradas: {len(memories)}")
+    signals.append(f"recomendacoes: {len(recommendations)}")
+    signals.append(f"historico_na_sessao: {'sim' if has_history else 'não'}")
+    context_signal = "[Sinais de contexto — " + " | ".join(signals) + "]"
+
     history_note = (
         "\nHá histórico acima. NÃO repita informações. Responda como quem já está na conversa."
     ) if has_history else ""
 
     if not has_context:
-        return f"""Mensagem: "{user_query}"
+        return f"""{context_signal}
+
+Mensagem: "{user_query}"
 
 Siga as regras do sistema.{history_note}""".strip()
 
-    return f"""Contexto interno (NÃO narrar ao usuário):{mem_block}{rec_block}
+    return f"""{context_signal}
+
+Contexto interno (NÃO narrar ao usuário):{mem_block}{rec_block}
 
 Mensagem: "{user_query}"
 

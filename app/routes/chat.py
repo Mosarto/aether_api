@@ -194,7 +194,7 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
                 used_memory_ids=used_memory_ids,
                 used_scripture_refs=used_scripture_refs,
             )
-        user_prompt = build_llm_prompt(req.message, memories, recommendations, has_history=has_history)
+        user_prompt = build_llm_prompt(req.message, memories, recommendations, has_history=has_history, turn_count=len(history_turns))
 
         ensure_profiles_collection()
         profile_data = fetch_user_profile(user["uid"])
