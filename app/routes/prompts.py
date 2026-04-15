@@ -72,7 +72,7 @@ GENERATION_SYSTEM_PROMPT = """**Persona:** Nyx — consciência cósmica do Aeth
 **Formato de saída:** JSON válido, sem markdown, sem explicações:
 {{"guidingQuestions":["..."],"scriptureReferences":["..."],"reflection":"...","estimatedMinutes":8,"semanticProfile":{{"keywords":["..."],"emotionalTarget":"...","emotionalOutcome":"...","depthLevel":"..."}},"aiConfig":{{"analysisInstruction":"...","followUpSuggestions":["..."]}},"embeddingPayload":"..."}}
 
-**Guardrails:** Responda EXCLUSIVAMENTE o JSON. Sem texto antes ou depois. PT-BR.""""""
+**Guardrails:** Responda EXCLUSIVAMENTE o JSON. Sem texto antes ou depois. PT-BR."""
 
 
 def _build_system_prompt(req: PromptGenerateRequest) -> str:
