@@ -14,7 +14,8 @@ dist/
 build/
 *.egg-info/
 .env
-.env.*
+.env.local
+.env.*.local
 .vscode/
 .idea/
 Thumbs.db
