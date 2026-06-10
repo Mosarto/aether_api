@@ -13,17 +13,17 @@ Flutter App (Dart)
        │
        ▼
   ┌──────────────┐     ┌──────────────┐     ┌─────────────────┐
-  │  FastAPI     │────▶│  Qdrant      │     │  Cerebras       │
-  │  (Backend)   │     │  (Memória    │     │  (LLM           │
-  │              │◀────│   Vetorial)  │     │   Qwen 3)       │
-  │  :8000       │     │  :6333       │     │   cloud API     │
+  │  FastAPI     │────▶│  Qdrant      │     │  OpenRouter     │
+  │  (Backend)   │     │  (Memória    │     │  (gateway LLM)  │
+  │              │◀────│   Vetorial)  │     │  DeepSeek +     │
+  │  :8000       │     │  :6333       │     │  Nemotron       │
   └──────┬───────┘     └──────────────┘     └────────┬────────┘
          │                                           │
          ├───────────── RAG + TOON ──────────────────┘
          │
          ├──────── Firebase Firestore (dados do usuário + Akashic)
          │
-         └──────── Google AI (Gemini 3 Flash — chat)
+         └──────── OpenRouter (DeepSeek chat + Nemotron background)
 ```
 
 **O fluxo:**
@@ -32,8 +32,8 @@ Flutter App (Dart)
 3. Na conversa, busca memórias pessoais + referências filosóficas relevantes via RAG
 4. Carrega o histórico da sessão (até 20 turns) e deduplica contexto já usado
 5. Monta um prompt compacto em formato TOON (economia de tokens)
-6. Envia para o Google AI (Gemini 3 Flash Preview) que responde como Nyx
-7. Background tasks (Cerebras) cuidam de compressão, extração de perfil e ferramentas de IA
+6. Envia para o OpenRouter usando `deepseek/deepseek-v4-pro`, que responde como Nyx
+7. Background tasks usam `nvidia/nemotron-3-ultra-550b-a55b:free` para compressão, extração de perfil e ferramentas de IA
 8. Salva os turns, metadados e resultados de ferramentas (AkashicRecord) no Qdrant/Firestore
 
 ---
@@ -46,8 +46,8 @@ Flutter App (Dart)
 | **Embeddings**     | FastEmbed 0.7 (CPU local)                  | Vetorização sem custo de API    |
 | **Modelo Embed.**  | `paraphrase-multilingual-MiniLM-L12-v2`   | 384 dimensões, 50+ idiomas     |
 | **Banco Vetorial** | Qdrant (com API key)                       | Busca semântica + memória       |
-| **LLM Chat**       | Google AI (Gemini 3 Flash Preview)         | Respostas da consciência Nyx    |
-| **LLM Background** | Cerebras Qwen 3 235B + Groq (failover)     | Compressão, perfil, ferramentas |
+| **LLM Chat**       | OpenRouter `deepseek/deepseek-v4-pro`      | Respostas da consciência Nyx    |
+| **LLM Background** | OpenRouter `nvidia/nemotron-3-ultra-550b-a55b:free` | Compressão, perfil, ferramentas |
 | **Firebase**       | Firebase Admin SDK (Auth + Firestore)      | Gestão de usuários e cotas      |
 | **Deploy**         | Docker Compose + Dokploy                   | Infra unificada                 |
 | **Frontend**       | Flutter (Dart)                             | App mobile                      |
@@ -62,7 +62,7 @@ api/
 ├── app/
 │   ├── __init__.py
 │   ├── config.py                ← Configuração centralizada, loggers, env vars, prompts
-│   ├── providers.py             ← Clientes Qdrant + Cerebras/Groq + Google AI
+│   ├── providers.py             ← Clientes Qdrant + OpenRouter
 │   ├── models.py                ← Modelos Pydantic (espelham Dart 1:1)
 │   ├── auth.py                  ← Firebase Auth (Bearer token validation)
 │   ├── rate_limit.py            ← Controle de tráfego por IP/Usuário
@@ -78,7 +78,7 @@ api/
 │   └── routes/
 │       ├── reflections.py       ← GET /reflections/{id}/exists, POST /reflections
 │       ├── answers.py           ← POST /user-answers
-│       ├── chat.py              ← POST /chat (Google AI + compressão + perfil)
+│       ├── chat.py              ← POST /chat (OpenRouter + compressão + perfil)
 │       ├── ai_tools.py          ← POST /ai/dream, /aura, /stoic, /sync
 │       ├── user_profile.py      ← GET /user/profile
 │       ├── prompts.py           ← POST /generate-prompt (geração via LLM)
@@ -174,7 +174,7 @@ Conversa inteligente com Nyx via RAG e sessões persistentes. Requer Firebase Au
   "response": "O universo não exige alinhamento, ele é o próprio alinhamento. Onde você parou de observar?",
   "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "sessionTitle": "Desalinhamento e Propósito",
-  "model": "google-gemini-3-flash-preview",
+  "model": "deepseek/deepseek-v4-pro",
   "contextSources": 4,
   "followUp": ["O que o silêncio te diz quando você para de procurar respostas?"]
 }
@@ -243,7 +243,7 @@ A API executa 60 testes automaticamente em toda inicialização. Falha em qualqu
 | Teste | O que valida |
 |-------|--------------|
 | **Qdrant Ops** (8) | Indexação, busca semântica, scroll de metadados, roundtrip de perfis |
-| **LLM Providers** (3) | Conexão real com Cerebras/Groq e Google AI (Gemini) |
+| **LLM Providers** (3) | Conexão real com OpenRouter para chat e background |
 | **Ownership** (2) | Isolamento de sessões e deleção segura de conversas |
 
 ### Testes E2E (2)
@@ -316,7 +316,7 @@ DEBUG=1 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ## 🐳 Deploy (Dokploy)
 
 1. Crie um serviço **Compose** apontando para o repositório.
-2. Configure as env vars: `GOOGLE_AI_API_KEY`, `CEREBRAS_API_KEY`, `GROQ_API_KEY`, `QDRANT_API_KEY`.
+2. Configure as env vars: `OPENROUTER_API_KEY`, `QDRANT_API_KEY`, `ALLOWED_ORIGINS` e `DEBUG` quando necessário.
 3. Para Firebase, cole o JSON completo em `FIREBASE_SERVICE_ACCOUNT_JSON`.
 4. O boot executará os 60 testes automaticamente.
 

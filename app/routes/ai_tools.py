@@ -18,7 +18,7 @@ from app.config import (
 from app.firebase import save_summary_to_firestore
 from app.models import AIToolRequest, AIToolResponse
 from app.profile import fetch_user_profile
-from app.providers import llm_create, qdrant
+from app.providers import create_background_completion, qdrant
 from app.quota import check_quota
 from app.rate_limit import check_rate_limit
 from app.toon import build_profile_toon
@@ -75,7 +75,7 @@ async def _process_ai_tool(
     """
     Shared processing for all AI tools.
     1. Optionally fetch user profile for context (aura, sync)
-    2. Call LLM (Cerebras/Groq via llm_create)
+    2. Call LLM (OpenRouter background completion)
     3. Parse JSON response
     4. Retry once with lower temperature on parse failure
     5. Save to Firestore
@@ -107,7 +107,7 @@ async def _process_ai_tool(
 
     parsed = None
     try:
-        raw_content, label = llm_create(
+        raw_content, label = create_background_completion(
             messages=messages,
             temperature=AI_TOOL_LLM_TEMPERATURE,
             max_tokens=AI_TOOL_LLM_MAX_TOKENS,
@@ -116,7 +116,7 @@ async def _process_ai_tool(
     except (json.JSONDecodeError, Exception) as first_err:
         logger.debug("ai-tool %s: retry (1st: %s)", tool_name, str(first_err)[:80])
         try:
-            raw_content, label = llm_create(
+            raw_content, label = create_background_completion(
                 messages=messages,
                 temperature=0.4,
                 max_tokens=AI_TOOL_LLM_MAX_TOKENS,

@@ -8,7 +8,7 @@ from app.config import (
     COL_CONVERSATIONS, DAILY_VERSE_PROMPT,
     DAILY_VERSE_TIMEZONE, DAILY_VERSE_DELAY_SECONDS, logger,
 )
-from app.providers import qdrant, llm_create
+from app.providers import qdrant, create_background_completion
 from app.profile import fetch_user_profile
 from app.firebase import list_all_users, update_daily_verse
 from app.toon import build_profile_toon, build_conversation_summary_toon
@@ -77,7 +77,7 @@ def _generate_verse(user_id: str) -> str | None:
     user_context = "\n".join(parts)
 
     try:
-        content, label = llm_create(
+        content, label = create_background_completion(
             messages=[
                 {"role": "system", "content": DAILY_VERSE_PROMPT},
                 {"role": "user", "content": user_context},

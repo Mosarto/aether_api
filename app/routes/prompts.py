@@ -13,7 +13,7 @@ from app.models import (
     VALID_CATEGORIES, VALID_EMOTIONAL_TARGETS,
     VALID_EMOTIONAL_OUTCOMES, VALID_DEPTH_LEVELS,
 )
-from app.providers import llm_create
+from app.providers import create_background_completion
 
 router = APIRouter(tags=["Prompts"])
 
@@ -172,7 +172,7 @@ def _call_llm(system_prompt: str, user_message: str, temperature: float) -> tupl
                  system_prompt[:200], system_prompt[-200:])
     logger.debug("generate-prompt: user_message: %s", user_message)
 
-    raw_content, label = llm_create(
+    raw_content, label = create_background_completion(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},

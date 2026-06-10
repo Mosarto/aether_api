@@ -8,7 +8,7 @@ from app.config import (
     COL_USER_PROFILES, COMPRESSION_PROMPT, PROFILE_EXTRACTION_PROMPT,
     GENDER_INFERENCE_PROMPT, AKASHIC_METADATA_PROMPT, deterministic_uuid, logger,
 )
-from app.providers import qdrant, llm_create
+from app.providers import qdrant, create_background_completion
 
 ZERO_VECTOR = [0.0] * 384
 
@@ -73,7 +73,7 @@ def _infer_gender(display_name: str) -> str:
     if not display_name:
         return "indefinido"
     try:
-        content, _ = llm_create(
+        content, _ = create_background_completion(
             messages=[
                 {"role": "system", "content": GENDER_INFERENCE_PROMPT},
                 {"role": "user", "content": display_name},
@@ -144,7 +144,7 @@ def compress_history(turns: list[dict]) -> str:
     history_text = "\n".join(lines)
 
     try:
-        content, label = llm_create(
+        content, label = create_background_completion(
             messages=[
                 {"role": "system", "content": COMPRESSION_PROMPT},
                 {"role": "user", "content": f"Histórico:\n{history_text}"},
@@ -172,7 +172,7 @@ def extract_profile_updates(current_profile: dict | None, conversation_summary: 
     )
 
     try:
-        content, label = llm_create(
+        content, label = create_background_completion(
             messages=[
                 {"role": "system", "content": PROFILE_EXTRACTION_PROMPT},
                 {"role": "user", "content": f"{profile_text}\n\nResumo da conversa recente:\n{conversation_summary}"},
@@ -216,7 +216,7 @@ def extract_akashic_metadata(summary: str, turn_count: int) -> dict:
         return base
 
     try:
-        content, label = llm_create(
+        content, label = create_background_completion(
             messages=[
                 {"role": "system", "content": AKASHIC_METADATA_PROMPT},
                 {"role": "user", "content": f"Resumo da conversa:\n{summary}"},

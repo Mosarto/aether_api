@@ -9,20 +9,17 @@ from fastapi import FastAPI
 from app.config import (
     logger, QDRANT_URL,
     EMBEDDING_MODEL, COL_REFLECTIONS, COL_USER_MEMORIES, COL_CONVERSATIONS,
-    COL_USER_PROFILES, GOOGLE_AI_API_KEY, FIREBASE_SERVICE_ACCOUNT_PATH,
+    COL_USER_PROFILES, OPENROUTER_API_KEY,
 )
-from app.providers import qdrant, _providers, google_ai_client
+from app.providers import qdrant, create_chat_completion, create_background_completion
 
 API_VERSION = "0.8.0"
 
 
 def _check_env_vars():
-    if not _providers:
-        logger.critical("nenhuma API key (CEREBRAS ou GROQ)")
+    if not OPENROUTER_API_KEY:
+        logger.critical("OPENROUTER_API_KEY ausente")
         sys.exit(1)
-
-    if not GOOGLE_AI_API_KEY:
-        logger.warning("GOOGLE_AI_API_KEY ausente — chat via Cerebras/Groq")
 
     if os.environ.get("ALLOWED_ORIGINS", "*") == "*":
         logger.warning("ALLOWED_ORIGINS='*'")
@@ -55,33 +52,22 @@ def _check_qdrant(max_retries: int = 5, delay: int = 3):
                 sys.exit(1)
 
 
-def _check_llm_providers() -> list[str]:
+def _check_openrouter() -> list[str]:
     ok = []
-    for provider in _providers:
+    probes = (
+        ("openrouter_chat", create_chat_completion),
+        ("openrouter_background", create_background_completion),
+    )
+    for label, create_completion in probes:
         try:
-            kwargs = {
-                "model": provider.model,
-                "messages": [{"role": "user", "content": "ping"}],
-                "temperature": 0,
-                provider.token_param: 1,
-            }
-            provider.client.chat.completions.create(**kwargs)
-            ok.append(provider.name)
-        except Exception:
-            logger.warning("%s ✗", provider.name)
-
-    if google_ai_client:
-        try:
-            from app.config import GOOGLE_AI_MODEL
-            from google.genai import types as genai_types
-            google_ai_client.models.generate_content(
-                model=GOOGLE_AI_MODEL,
-                contents="ping",
-                config=genai_types.GenerateContentConfig(max_output_tokens=50),
+            create_completion(
+                [{"role": "user", "content": "ping"}],
+                temperature=0,
+                max_tokens=1,
             )
-            ok.append("google-ai")
+            ok.append(label)
         except Exception:
-            logger.warning("google-ai ✗")
+            logger.warning("%s ✗", label)
 
     return ok
 
@@ -105,7 +91,7 @@ async def lifespan(app: FastAPI):
     _check_env_vars()
     _check_qdrant()
     firebase_ok = _check_firebase()
-    llm_ok = _check_llm_providers()
+    llm_ok = _check_openrouter()
     _check_embedding_model()
 
     services = ["qdrant"] + llm_ok + (["firebase"] if firebase_ok else []) + ["embedding"]
@@ -129,4 +115,3 @@ async def lifespan(app: FastAPI):
     logger.info("✅ ready")
 
     yield
-

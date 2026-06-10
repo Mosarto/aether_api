@@ -5,7 +5,7 @@ from qdrant_client.http import models as qmodels
 
 from app.config import (
     COL_CONVERSATIONS, SESSION_TTL_HOURS,
-    PROFILE_JOB_INTERVAL_MINUTES, COMPRESSION_MIN_TURNS, logger,
+    PROFILE_JOB_INTERVAL_MINUTES, logger,
 )
 from app.providers import qdrant
 from app.profile import (
@@ -14,6 +14,46 @@ from app.profile import (
     extract_akashic_metadata,
 )
 from app.firebase import save_summary_to_firestore
+
+_TRIVIAL_GREETING_TOKENS = {
+    "oi", "olá", "ola", "eai", "e aí", "e ai", "fala", "hey",
+    "salve", "bom dia", "boa tarde", "boa noite", "hello", "hi",
+    "opa", "yo", "fala aí", "fala ai", "coé", "coe",
+}
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(text.strip().lower().rstrip("!?.,").split())
+
+
+def _should_create_akashic(turns: list[dict], summary: str) -> bool:
+    if len(turns) < 2 or not summary.strip():
+        return False
+
+    user_turns = [str(t.get("content", "")).strip() for t in turns if t.get("role") == "user"]
+    assistant_turns = [
+        str(t.get("content", "")).strip()
+        for t in turns
+        if t.get("role") in {"assistant", "ai", "model"}
+    ]
+
+    if not user_turns or not assistant_turns:
+        return False
+
+    user_text = " ".join(t for t in user_turns if t)
+    assistant_text = " ".join(t for t in assistant_turns if t)
+    normalized_user = _normalize_text(user_text)
+
+    if len(user_turns) == 1 and normalized_user in _TRIVIAL_GREETING_TOKENS:
+        return False
+
+    if len(user_text) < 10 and len(assistant_text) < 80:
+        return False
+
+    if len(summary.strip()) < 40 and len(user_text) < 20:
+        return False
+
+    return True
 
 
 def _find_expired_unprocessed_sessions() -> list[dict]:
@@ -98,26 +138,42 @@ def process_finalized_sessions():
         try:
             turns = _load_session_turns(session_id)
             if not turns:
+                logger.info("profile-job: sessão %s sem turns, marcando processada", session_id[:8])
                 _mark_session_processed(point_id, "")
                 continue
+
+            logger.info("profile-job: sessão %s com %d turns", session_id[:8], len(turns))
 
             summary = compress_history(turns)
             if not summary:
-                _mark_session_processed(point_id, "")
+                logger.warning("profile-job: sessão %s sem summary, mantendo pendente para retry", session_id[:8])
                 continue
 
-            # Save akashic record to Firestore (only for meaningful sessions)
-            if len(turns) >= COMPRESSION_MIN_TURNS:
+            create_akashic = _should_create_akashic(turns, summary)
+            if create_akashic:
                 akashic_meta = extract_akashic_metadata(summary, len(turns))
                 akashic_payload = {
-                    "title": "",
+                    "sessionId": session_id,
+                    "title": session_meta.get("title", ""),
                     "snippet": summary,
-                    "tags": [],
+                    "tags": [akashic_meta["mood"]] if akashic_meta.get("mood") else [],
                     "date": datetime.now(timezone.utc).isoformat(),
                     "tool": "session_summary",
                     **akashic_meta,
                 }
-                save_summary_to_firestore(user_id, akashic_payload)
+                summary_id = save_summary_to_firestore(user_id, akashic_payload)
+                if not summary_id:
+                    logger.warning(
+                        "profile-job: falha ao salvar Akashic da sessão %s, mantendo pendente para retry",
+                        session_id[:8],
+                    )
+                    continue
+                logger.info("profile-job: Akashic %s salvo para sessão %s", summary_id[:8], session_id[:8])
+            else:
+                logger.info(
+                    "profile-job: sessão %s sem Akashic (trivial ou curta)",
+                    session_id[:8],
+                )
 
             current_profile = fetch_user_profile(user_id)
             updates = extract_profile_updates(current_profile, summary)

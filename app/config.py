@@ -39,8 +39,15 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",")
-CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
-GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_CHAT_MODEL = "deepseek/deepseek-v4-pro"
+OPENROUTER_BACKGROUND_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+OPENROUTER_TIMEOUT_SECONDS = float(os.environ.get("OPENROUTER_TIMEOUT_SECONDS", "45"))
+OPENROUTER_MAX_RETRIES = int(os.environ.get("OPENROUTER_MAX_RETRIES", "2"))
+OPENROUTER_RETRY_STATUS_CODES = (429, 503)
+OPENROUTER_HTTP_REFERER = os.environ.get("OPENROUTER_HTTP_REFERER", "")
+OPENROUTER_APP_TITLE = os.environ.get("OPENROUTER_APP_TITLE", "Aether")
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
 FIREBASE_SERVICE_ACCOUNT_PATH = os.environ.get("FIREBASE_SERVICE_ACCOUNT_PATH", "serviceAccountKey.json")
@@ -52,15 +59,6 @@ COL_REFLECTIONS = "reflections"
 COL_USER_MEMORIES = "user_memories"
 COL_CONVERSATIONS = "conversations"
 COL_USER_PROFILES = "user_profiles"
-
-CEREBRAS_MODEL = "qwen-3-235b-a22b-instruct-2507"
-CEREBRAS_BASE_URL = "https://api.cerebras.ai/v1"
-
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GROQ_MODEL = "llama-3.3-70b-versatile"
-GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-
-GOOGLE_AI_MODEL = "gemini-3-flash-preview"
 
 CHAT_MAX_TURNS = 20
 SESSION_TTL_HOURS = 6

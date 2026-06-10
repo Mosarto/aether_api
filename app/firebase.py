@@ -165,14 +165,18 @@ def save_summary_to_firestore(uid: str, summary: dict) -> str | None:
         return None
 
     try:
+        summaries = db.collection("users").document(uid).collection("summaries")
+        session_id = summary.get("sessionId")
         payload = {
             "title": summary.get("title", ""),
             "snippet": summary.get("snippet", ""),
             "tags": summary.get("tags", []),
             "date": summary.get("date", ""),
             "tool": summary.get("tool", ""),
-            "createdAt": firestore.SERVER_TIMESTAMP,
         }
+
+        if session_id:
+            payload["sessionId"] = session_id
 
         # Enriched akashic fields (optional — backward compatible)
         if summary.get("mood"):
@@ -184,7 +188,15 @@ def save_summary_to_firestore(uid: str, summary: dict) -> str | None:
         if summary.get("turnCount") is not None:
             payload["turnCount"] = summary["turnCount"]
 
-        _, doc_ref = db.collection("users").document(uid).collection("summaries").add(payload)
+        if session_id:
+            existing_docs = list(summaries.where("sessionId", "==", session_id).limit(1).stream())
+            if existing_docs:
+                doc = existing_docs[0]
+                summaries.document(doc.id).set(payload, merge=True)
+                return doc.id
+
+        payload["createdAt"] = firestore.SERVER_TIMESTAMP
+        _, doc_ref = summaries.add(payload)
         return doc_ref.id
     except Exception as e:
         logger.warning("Falha ao salvar summary do usuário %s: %s", uid, e)

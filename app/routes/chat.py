@@ -7,16 +7,14 @@ from app.auth import get_current_user
 from app.rate_limit import check_rate_limit
 from app.quota import check_quota
 from qdrant_client.http.exceptions import UnexpectedResponse
-from google.genai import types as genai_types
-
 from app.config import (
     SYSTEM_PROMPT, COL_CONVERSATIONS,
     CHAT_MAX_TURNS, COMPRESSION_MIN_TURNS, deterministic_uuid, logger,
 )
 from app.models import ChatRequest, ChatResponse
-from app.providers import qdrant, llm_create, google_ai_create
+from app.providers import qdrant, create_chat_completion, create_background_completion
 from app.rag import retrieve_context, build_llm_prompt
-from app.routes.conversations import _is_session_active, _get_session_turns
+from app.routes.conversations import _get_session_turns
 from app.profile import fetch_user_profile, compress_history, ensure_profiles_collection, create_initial_profile, sync_firebase_fields
 from app.toon import build_profile_toon, build_conversation_summary_toon
 from app.firebase import fetch_firestore_user
@@ -87,16 +85,18 @@ def _upsert_session_meta(session_id: str, user_id: str, reflection_id: str | Non
 
 def _generate_session_title(user_message: str, ai_response: str) -> str:
     try:
-        content, _ = llm_create(
-            messages=[{
-                "role": "user",
-                "content": (
-                    "Crie um título curto (3 a 5 palavras, sem aspas, sem emoji) para esta conversa.\n"
-                    f"Usuário: {user_message[:200]}\n"
-                    f"Resposta: {ai_response[:200]}\n"
-                    "Título:"
-                ),
-            }],
+        content, _ = create_background_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Crie um título curto (3 a 5 palavras, sem aspas, sem emoji) para esta conversa.\n"
+                        f"Usuário: {user_message[:200]}\n"
+                        f"Resposta: {ai_response[:200]}\n"
+                        "Título:"
+                    ),
+                },
+            ],
             temperature=0.3,
             max_tokens=20,
         )
@@ -152,36 +152,30 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
 
             if all_turns:
                 first_ts = all_turns[0].get("timestamp", now_iso)
-                last_ts = all_turns[-1].get("timestamp", now_iso)
+                created_at = first_ts
+                history_turns = all_turns[-CHAT_MAX_TURNS:]
 
-                if not _is_session_active(last_ts):
-                    session_id = str(uuid4())
-                    logger.debug("sessão expirada, nova: %s", session_id)
-                else:
-                    created_at = first_ts
-                    history_turns = all_turns[-CHAT_MAX_TURNS:]
+                recent_turns = all_turns[-CHAT_MAX_TURNS:]
+                for t in recent_turns:
+                    used_memory_ids.extend(t.get("used_memory_ids", []))
+                    used_scripture_refs.extend(t.get("used_scriptures", []))
 
-                    recent_turns = all_turns[-CHAT_MAX_TURNS:]
-                    for t in recent_turns:
-                        used_memory_ids.extend(t.get("used_memory_ids", []))
-                        used_scripture_refs.extend(t.get("used_scriptures", []))
-
-                    try:
-                        from qdrant_client.http import models as qm
-                        meta, _ = qdrant.scroll(
-                            collection_name=COL_CONVERSATIONS,
-                            scroll_filter=qm.Filter(must=[
-                                qm.FieldCondition(key="session_id", match=qm.MatchValue(value=session_id)),
-                                qm.FieldCondition(key="is_session_meta", match=qm.MatchValue(value=True)),
-                            ]),
-                            limit=1, with_payload=True, with_vectors=False,
-                        )
-                        if meta:
-                            mp = meta[0].payload or {}
-                            existing_title = mp.get("title", "")
-                            existing_reflection_id = mp.get("reflection_id", "")
-                    except Exception as e:
-                        logger.debug("Falha ao buscar meta da sessão %s: %s", session_id, e)
+                try:
+                    from qdrant_client.http import models as qm
+                    meta, _ = qdrant.scroll(
+                        collection_name=COL_CONVERSATIONS,
+                        scroll_filter=qm.Filter(must=[
+                            qm.FieldCondition(key="session_id", match=qm.MatchValue(value=session_id)),
+                            qm.FieldCondition(key="is_session_meta", match=qm.MatchValue(value=True)),
+                        ]),
+                        limit=1, with_payload=True, with_vectors=False,
+                    )
+                    if meta:
+                        mp = meta[0].payload or {}
+                        existing_title = mp.get("title", "")
+                        existing_reflection_id = mp.get("reflection_id", "")
+                except Exception as e:
+                    logger.debug("Falha ao buscar meta da sessão %s: %s", session_id, e)
 
         has_history = len(history_turns) > 0
         is_greeting = _is_trivial_greeting(req.message)
@@ -216,44 +210,29 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
         if len(history_turns) >= COMPRESSION_MIN_TURNS:
             compressed_summary = compress_history(history_turns)
 
-        contents: list[genai_types.Content] = []
+        messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         if profile_toon:
-            contents.append(genai_types.Content(
-                role="user",
-                parts=[genai_types.Part.from_text(text=f"[Contexto interno — perfil do usuário. NÃO narrar, NÃO mencionar diretamente.]\n{profile_toon}")],
-            ))
-            contents.append(genai_types.Content(
-                role="model",
-                parts=[genai_types.Part.from_text(text="Entendido, conheço o usuário. Vou seguir as regras do sistema.")],
-            ))
+            messages.append({
+                "role": "system",
+                "content": f"[Contexto interno — perfil do usuário. NÃO narrar, NÃO mencionar diretamente.]\n{profile_toon}",
+            })
 
         if compressed_summary:
             summary_toon = build_conversation_summary_toon(compressed_summary)
-            contents.append(genai_types.Content(
-                role="user",
-                parts=[genai_types.Part.from_text(text=f"[Contexto interno — resumo do histórico]\n{summary_toon}")],
-            ))
-            contents.append(genai_types.Content(
-                role="model",
-                parts=[genai_types.Part.from_text(text="Entendido, tenho o contexto.")],
-            ))
+            messages.append({
+                "role": "system",
+                "content": f"[Contexto interno — resumo do histórico]\n{summary_toon}",
+            })
         else:
             for turn in history_turns:
-                role = "user" if turn["role"] == "user" else "model"
-                contents.append(genai_types.Content(
-                    role=role,
-                    parts=[genai_types.Part.from_text(text=turn["content"])],
-                ))
+                role = "user" if turn["role"] == "user" else "assistant"
+                messages.append({"role": role, "content": turn["content"]})
 
-        contents.append(genai_types.Content(
-            role="user",
-            parts=[genai_types.Part.from_text(text=user_prompt)],
-        ))
+        messages.append({"role": "user", "content": user_prompt})
 
-        ai_response, model_label = google_ai_create(
-            contents=contents,
-            system_instruction=SYSTEM_PROMPT,
+        ai_response, model_label = create_chat_completion(
+            messages=messages,
             temperature=0.7,
         )
 

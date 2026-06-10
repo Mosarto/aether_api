@@ -1,10 +1,25 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from app.config import EMBEDDING_MODEL, GOOGLE_AI_API_KEY, GOOGLE_AI_MODEL
-from app.providers import qdrant, _providers, google_ai_client
+from app.config import EMBEDDING_MODEL, OPENROUTER_API_KEY
+from app.providers import qdrant, create_chat_completion, create_background_completion
 
 router = APIRouter(tags=["Sistema"])
+
+
+def _probe_openrouter(create_completion) -> str:
+    if not OPENROUTER_API_KEY:
+        return "not_configured"
+
+    try:
+        create_completion(
+            [{"role": "user", "content": "ping"}],
+            temperature=0,
+            max_tokens=1,
+        )
+        return "ok"
+    except Exception:
+        return "unreachable"
 
 
 @router.get("/health")
@@ -18,35 +33,12 @@ async def health():
     except Exception:
         checks["qdrant"] = "offline"
 
-    llm_status = {}
-    for provider in _providers:
-        try:
-            kwargs = {
-                "model": provider.model,
-                "messages": [{"role": "user", "content": "ping"}],
-                "temperature": 0,
-                provider.token_param: 1,
-            }
-            provider.client.chat.completions.create(**kwargs)
-            llm_status[provider.name] = "ok"
-        except Exception:
-            llm_status[provider.name] = "unreachable"
+    llm_status = {
+        "openrouter_chat": _probe_openrouter(create_chat_completion),
+        "openrouter_background": _probe_openrouter(create_background_completion),
+    }
 
-    if google_ai_client:
-        try:
-            from google.genai import types as genai_types
-            google_ai_client.models.generate_content(
-                model=GOOGLE_AI_MODEL,
-                contents="ping",
-                config=genai_types.GenerateContentConfig(max_output_tokens=1),
-            )
-            llm_status["google_ai"] = "ok"
-        except Exception:
-            llm_status["google_ai"] = "unreachable"
-    else:
-        llm_status["google_ai"] = "not_configured"
-
-    checks["llm_providers"] = llm_status
+    checks["llm"] = llm_status
     checks["embedding"] = EMBEDDING_MODEL
 
     try:

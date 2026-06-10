@@ -1,111 +1,136 @@
-import itertools
-from dataclasses import dataclass
+import time
+from typing import Any
 
+import httpx
 from qdrant_client import QdrantClient
-from openai import OpenAI
-from google import genai
-from google.genai import types as genai_types
 
 from app.config import (
     QDRANT_URL, QDRANT_API_KEY,
-    CEREBRAS_BASE_URL, CEREBRAS_API_KEY, CEREBRAS_MODEL,
-    GROQ_BASE_URL, GROQ_API_KEY, GROQ_MODEL,
-    GOOGLE_AI_API_KEY, GOOGLE_AI_MODEL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_ENDPOINT,
+    OPENROUTER_CHAT_MODEL,
+    OPENROUTER_BACKGROUND_MODEL,
+    OPENROUTER_TIMEOUT_SECONDS,
+    OPENROUTER_MAX_RETRIES,
+    OPENROUTER_RETRY_STATUS_CODES,
+    OPENROUTER_HTTP_REFERER,
+    OPENROUTER_APP_TITLE,
     logger,
 )
 
 qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
 
 
-@dataclass
-class LLMProvider:
-    name: str
-    client: OpenAI
-    model: str
-    token_param: str
+def _openrouter_headers() -> dict[str, str]:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OPENROUTER_API_KEY não configurada")
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    if OPENROUTER_HTTP_REFERER:
+        headers["HTTP-Referer"] = OPENROUTER_HTTP_REFERER
+    if OPENROUTER_APP_TITLE:
+        headers["X-OpenRouter-Title"] = OPENROUTER_APP_TITLE
+    return headers
 
 
-_providers: list[LLMProvider] = []
-
-if CEREBRAS_API_KEY:
-    _providers.append(LLMProvider(
-        name="cerebras",
-        client=OpenAI(base_url=CEREBRAS_BASE_URL, api_key=CEREBRAS_API_KEY),
-        model=CEREBRAS_MODEL,
-        token_param="max_tokens",
-    ))
-
-if GROQ_API_KEY:
-    _providers.append(LLMProvider(
-        name="groq",
-        client=OpenAI(base_url=GROQ_BASE_URL, api_key=GROQ_API_KEY),
-        model=GROQ_MODEL,
-        token_param="max_completion_tokens",
-    ))
-
-if not _providers:
-    raise RuntimeError("Nenhuma API key configurada (CEREBRAS_API_KEY ou GROQ_API_KEY)")
-
-_cycle = itertools.cycle(_providers)
-
-google_ai_client: genai.Client | None = None
-if GOOGLE_AI_API_KEY:
-    google_ai_client = genai.Client(api_key=GOOGLE_AI_API_KEY)
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    value = response.headers.get("Retry-After", "").strip()
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
 
 
-def get_next_llm() -> LLMProvider:
-    return next(_cycle)
+def _extract_content(payload: dict[str, Any], model: str) -> str:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError(f"OpenRouter response missing choices for model {model}")
 
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise RuntimeError(f"OpenRouter response has invalid choice for model {model}")
 
-def llm_create(messages: list, temperature: float = 0.7, max_tokens: int = 600) -> tuple[str, str]:
-    first = get_next_llm()
-    providers_to_try = [first] + [p for p in _providers if p.name != first.name]
+    message = first.get("message")
+    if not isinstance(message, dict):
+        raise RuntimeError(f"OpenRouter response missing message for model {model}")
 
-    for provider in providers_to_try:
-        try:
-            kwargs = {
-                "model": provider.model,
-                "messages": messages,
-                "temperature": temperature,
-                provider.token_param: max_tokens,
-            }
-            completion = provider.client.chat.completions.create(**kwargs)
-            content = completion.choices[0].message.content or ""
-            label = f"{provider.name}-{provider.model}"
-            return content, label
-        except Exception as e:
-            logger.warning("Falha no provider %s: %s", provider.name, e)
-            continue
-
-    raise RuntimeError("Todos os providers LLM falharam")
-
-
-def google_ai_create(
-    contents: list[genai_types.Content],
-    system_instruction: str,
-    temperature: float = 0.7,
-) -> tuple[str, str]:
-    if not google_ai_client:
-        raise RuntimeError("GOOGLE_AI_API_KEY não configurada")
-
-    response = google_ai_client.models.generate_content(
-        model=GOOGLE_AI_MODEL,
-        contents=contents,
-        config=genai_types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=temperature,
-        ),
-    )
-    label = f"google-{GOOGLE_AI_MODEL}"
-    text = ""
-    if response.candidates:
-        for part in response.candidates[0].content.parts:
-            if not getattr(part, "thought", False):
-                text += part.text or ""
-    if not text and response.candidates:
-        c = response.candidates[0]
-        logger.warning(
-            "google-ai resposta vazia — finish_reason=%s",
-            getattr(c, "finish_reason", "?"),
+    content = message.get("content")
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
         )
-    return text, label
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError(f"OpenRouter response empty content for model {model}")
+    return content
+
+
+def _create_completion(
+    model: str,
+    messages: list,
+    temperature: float,
+    max_tokens: int,
+) -> tuple[str, str]:
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_completion_tokens": max_tokens,
+    }
+
+    attempts = OPENROUTER_MAX_RETRIES + 1
+    last_status: int | None = None
+    for attempt in range(attempts):
+        try:
+            response = httpx.post(
+                OPENROUTER_ENDPOINT,
+                headers=_openrouter_headers(),
+                json=payload,
+                timeout=OPENROUTER_TIMEOUT_SECONDS,
+            )
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(f"OpenRouter request timed out for model {model}") from exc
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"OpenRouter request failed for model {model}: {exc.__class__.__name__}") from exc
+
+        last_status = response.status_code
+        if response.status_code in OPENROUTER_RETRY_STATUS_CODES and attempt < attempts - 1:
+            retry_after = _retry_after_seconds(response)
+            if retry_after is not None:
+                logger.warning(
+                    "OpenRouter %s returned HTTP %s; retrying after %.2fs",
+                    model,
+                    response.status_code,
+                    retry_after,
+                )
+                time.sleep(retry_after)
+                continue
+
+        if response.status_code < 200 or response.status_code >= 300:
+            raise RuntimeError(f"OpenRouter request failed with HTTP {response.status_code} for model {model}")
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RuntimeError(f"OpenRouter returned non-JSON response for model {model}") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"OpenRouter returned invalid JSON payload for model {model}")
+
+        return _extract_content(data, model), f"openrouter-{model}"
+
+    raise RuntimeError(f"OpenRouter request exhausted retries for model {model}; last_status={last_status}")
+
+
+def create_chat_completion(messages: list, temperature: float = 0.7, max_tokens: int = 600) -> tuple[str, str]:
+    return _create_completion(OPENROUTER_CHAT_MODEL, messages, temperature, max_tokens)
+
+
+def create_background_completion(messages: list, temperature: float = 0.7, max_tokens: int = 600) -> tuple[str, str]:
+    return _create_completion(OPENROUTER_BACKGROUND_MODEL, messages, temperature, max_tokens)
