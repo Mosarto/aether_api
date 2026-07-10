@@ -4,6 +4,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -638,6 +639,24 @@ def test_openrouter_missing_key_error_is_secret_safe():
                 assert secret not in message, "Erro não deve vazar segredo"
                 assert "Bearer" not in message, "Erro não deve expor header Authorization"
             post.assert_not_called()
+
+
+def test_health_endpoint_avoids_billable_llm_calls():
+    health_route = importlib.import_module("app.routes.health")
+
+    with patch.object(health_route, "OPENROUTER_API_KEY", "unit-key"):
+        with patch.object(
+            health_route.qdrant,
+            "get_collections",
+            return_value=SimpleNamespace(collections=[]),
+        ):
+            with patch("app.firebase.get_firestore_db", return_value=None):
+                with patch("app.providers.httpx.post") as post:
+                    response = asyncio.run(health_route.health())
+
+    assert response.status_code == 200, "Health configurado deveria retornar 200"
+    assert b'"openrouter":"configured"' in response.body.replace(b" ", b"")
+    post.assert_not_called()
 
 
 def test_openrouter_chat_wrapper_uses_chat_model():
@@ -1591,6 +1610,7 @@ UNIT_TESTS = [
     ("unit/pydantic_validation", test_pydantic_models_validation),
     ("unit/config_values", test_config_values),
     ("unit/openrouter_missing_key_secret_safe", test_openrouter_missing_key_error_is_secret_safe),
+    ("unit/health_avoids_billable_llm_calls", test_health_endpoint_avoids_billable_llm_calls),
     ("unit/openrouter_chat_wrapper_model", test_openrouter_chat_wrapper_uses_chat_model),
     ("unit/openrouter_background_wrapper_model", test_openrouter_background_wrapper_uses_background_model),
     ("unit/openrouter_retries_429_retry_after", test_openrouter_retries_429_with_retry_after),

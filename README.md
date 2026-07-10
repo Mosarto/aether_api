@@ -74,7 +74,7 @@ api/
 │   ├── background.py            ← Background job (perfil a cada 30min)
 │   ├── daily_verse.py           ← Cron daily verse (meia-noite BRT)
 │   ├── startup.py               ← Health checks + test battery no boot
-│   ├── test_battery.py          ← 60 testes automatizados (unit/integration/e2e)
+│   ├── test_battery.py          ← 73 testes automatizados (unit/integration/e2e)
 │   └── routes/
 │       ├── reflections.py       ← GET /reflections/{id}/exists, POST /reflections
 │       ├── answers.py           ← POST /user-answers
@@ -225,9 +225,9 @@ Força a geração do "daily verse" (multi-tradição: filosofia, poesia, estoic
 
 ---
 
-## 🧪 Test Battery (60 testes)
+## 🧪 Test Battery (73 testes)
 
-A API executa 60 testes automaticamente em toda inicialização. Falha em qualquer teste aborta o processo.
+A API executa 73 testes automaticamente em toda inicialização. Falha em qualquer teste aborta o processo.
 
 ### Testes Unitários (46)
 | Grupo | O que valida |
@@ -297,8 +297,8 @@ Sabedoria multi-tradição personalizada para cada usuário:
 
 ### 1. Clonar e configurar
 ```bash
-git clone https://github.com/Mosarto/aether.git
-cd aether/api
+git clone https://github.com/Mosarto/aether_api.git
+cd aether_api
 cp .env.example .env
 ```
 
@@ -318,7 +318,7 @@ DEBUG=1 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 1. Crie um serviço **Compose** apontando para o repositório.
 2. Configure as env vars: `OPENROUTER_API_KEY`, `QDRANT_API_KEY`, `ALLOWED_ORIGINS` e `DEBUG` quando necessário.
 3. Para Firebase, cole o JSON completo em `FIREBASE_SERVICE_ACCOUNT_JSON`.
-4. O boot executará os 60 testes automaticamente.
+4. O boot executará os 73 testes automaticamente.
 
 ---
 
@@ -329,4 +329,4 @@ Logs limpos, sem ruído de bibliotecas externas ou tracebacks de Uvicorn.
 ---
 
 ## 📜 Licença
-Projeto privado — Artomos © 2026
+Distribuído sob a licença MIT. Consulte `LICENSE`.

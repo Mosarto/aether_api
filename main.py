@@ -3,13 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from app.config import ALLOWED_ORIGINS, DEBUG
-from app.startup import lifespan
+from app.startup import API_VERSION, lifespan
 from app.rate_limit import RateLimitExceeded
 from app.routes import reflections, answers, chat, health, conversations, prompts, ai_tools, user_profile
 
 app = FastAPI(
     title="Aether API",
-    version="0.6.0",
+    version=API_VERSION,
     docs_url="/docs" if DEBUG else None,
     lifespan=lifespan,
 )
