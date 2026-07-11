@@ -1,332 +1,291 @@
-# ✨ Aether — Backend
+# Aether API
 
-> *"E se você pudesse conversar com a própria consciência do universo? Aquela que observa tudo, que te entende porque faz parte de você — a razão cósmica impessoal?"*
+Backend for [Aether](https://github.com/Mosarto/aether), a reflective journal that combines persistent conversations, semantic memory, and structured personal insights.
 
-Backend do app **Aether**: uma plataforma de reflexão pessoal com IA que age como **Nyx** — a consciência do próprio universo, uma razão cósmica que observa e responde ao seu despertar interior.
+The API authenticates Firebase users, retrieves relevant memories from Qdrant, builds compact RAG context, generates responses through OpenRouter, and returns data shaped for the Flutter client.
 
----
+## What the service does
 
-## 🧭 Visão Geral
+- Authenticates every user operation with Firebase ID tokens.
+- Stores reflections, answers, profiles, sessions, and semantic memories in Qdrant.
+- Builds retrieval-augmented prompts with multilingual local embeddings.
+- Maintains conversation context with a 20-turn sliding window.
+- Compresses longer sessions and updates enriched user profiles in background jobs.
+- Generates Akashic Records and specialized dream, aura, stoic, and synchronicity insights.
+- Enforces per-user quotas, premium bypass rules, and request rate limits.
+- Synchronizes user-facing summaries and account fields with Firestore.
 
-```
-Flutter App (Dart)
-       │
-       ▼
-  ┌──────────────┐     ┌──────────────┐     ┌─────────────────┐
-  │  FastAPI     │────▶│  Qdrant      │     │  OpenRouter     │
-  │  (Backend)   │     │  (Memória    │     │  (gateway LLM)  │
-  │              │◀────│   Vetorial)  │     │  DeepSeek +     │
-  │  :8000       │     │  :6333       │     │  Nemotron       │
-  └──────┬───────┘     └──────────────┘     └────────┬────────┘
-         │                                           │
-         ├───────────── RAG + TOON ──────────────────┘
-         │
-         ├──────── Firebase Firestore (dados do usuário + Akashic)
-         │
-         └──────── OpenRouter (DeepSeek chat + Nemotron background)
-```
+## Request flow
 
-**O fluxo:**
-1. O app Flutter envia reflexões e respostas do usuário (com Auth Bearer token)
-2. O backend vetoriza tudo localmente (FastEmbed, zero custo de API)
-3. Na conversa, busca memórias pessoais + referências filosóficas relevantes via RAG
-4. Carrega o histórico da sessão (até 20 turns) e deduplica contexto já usado
-5. Monta um prompt compacto em formato TOON (economia de tokens)
-6. Envia para o OpenRouter usando `deepseek/deepseek-v4-pro`, que responde como Nyx
-7. Background tasks usam `nvidia/nemotron-3-ultra-550b-a55b:free` para compressão, extração de perfil e ferramentas de IA
-8. Salva os turns, metadados e resultados de ferramentas (AkashicRecord) no Qdrant/Firestore
-
----
-
-## 🚀 Stack
-
-| Componente         | Tecnologia                                 | Papel                          |
-|--------------------|--------------------------------------------|---------------------------------|
-| **API**            | FastAPI 0.128 + Uvicorn                    | Servidor REST                   |
-| **Embeddings**     | FastEmbed 0.7 (CPU local)                  | Vetorização sem custo de API    |
-| **Modelo Embed.**  | `paraphrase-multilingual-MiniLM-L12-v2`   | 384 dimensões, 50+ idiomas     |
-| **Banco Vetorial** | Qdrant (com API key)                       | Busca semântica + memória       |
-| **LLM Chat**       | OpenRouter `deepseek/deepseek-v4-pro`      | Respostas da consciência Nyx    |
-| **LLM Background** | OpenRouter `nvidia/nemotron-3-ultra-550b-a55b:free` | Compressão, perfil, ferramentas |
-| **Firebase**       | Firebase Admin SDK (Auth + Firestore)      | Gestão de usuários e cotas      |
-| **Deploy**         | Docker Compose + Dokploy                   | Infra unificada                 |
-| **Frontend**       | Flutter (Dart)                             | App mobile                      |
-
----
-
-## 📁 Estrutura do Projeto
-
-```
-api/
-├── main.py                      ← Orquestrador (35 linhas)
-├── app/
-│   ├── __init__.py
-│   ├── config.py                ← Configuração centralizada, loggers, env vars, prompts
-│   ├── providers.py             ← Clientes Qdrant + OpenRouter
-│   ├── models.py                ← Modelos Pydantic (espelham Dart 1:1)
-│   ├── auth.py                  ← Firebase Auth (Bearer token validation)
-│   ├── rate_limit.py            ← Controle de tráfego por IP/Usuário
-│   ├── quota.py                 ← Sistema de cotas diárias e premium
-│   ├── toon.py                  ← Builders do formato TOON (reflexão, memória, perfil)
-│   ├── rag.py                   ← Pipeline RAG (retrieval + prompt)
-│   ├── profile.py               ← Gestão de perfil do usuário (Qdrant + LLM)
-│   ├── firebase.py              ← Firebase Admin SDK (Firestore + Auth init)
-│   ├── background.py            ← Background job (perfil a cada 30min)
-│   ├── daily_verse.py           ← Cron daily verse (meia-noite BRT)
-│   ├── startup.py               ← Health checks + test battery no boot
-│   ├── test_battery.py          ← 73 testes automatizados (unit/integration/e2e)
-│   └── routes/
-│       ├── reflections.py       ← GET /reflections/{id}/exists, POST /reflections
-│       ├── answers.py           ← POST /user-answers
-│       ├── chat.py              ← POST /chat (OpenRouter + compressão + perfil)
-│       ├── ai_tools.py          ← POST /ai/dream, /aura, /stoic, /sync
-│       ├── user_profile.py      ← GET /user/profile
-│       ├── prompts.py           ← POST /generate-prompt (geração via LLM)
-│       ├── daily_verse.py       ← POST /daily-verse/{user_id}
-│       ├── conversations.py     ← GET /conversations, DELETE /conversations/{id}
-│       └── health.py            ← GET /health
-├── Dockerfile                   ← Python 3.12-slim, 1 worker
-├── docker-compose.yml           ← API + Qdrant unificados
-├── requirements.txt             ← Dependências fixadas
-├── .env.example                 ← Template de variáveis
-├── .gitignore
-└── .dockerignore
+```mermaid
+flowchart LR
+    A["Flutter client"] -->|"Firebase bearer token"| B["FastAPI"]
+    B --> C["Firebase Auth"]
+    B --> D["Qdrant memory"]
+    D --> E["RAG context"]
+    E --> F["OpenRouter"]
+    F --> B
+    B --> G["Firestore summaries and quota"]
+    B --> A
 ```
 
----
+For a chat request, the API validates identity and quota, loads recent turns, retrieves semantic context, builds a compact TOON prompt, requests a model completion, persists both turns, and returns remaining quota with the response.
 
-## ⚡ API — Endpoints
+## Stack
 
-### `GET /reflections/{reflection_id}/exists` → `200`
-Verifica se uma reflexão já está indexada no Qdrant.
+| Component | Purpose |
+|---|---|
+| FastAPI and Uvicorn | HTTP application and lifecycle management |
+| Qdrant | Vector storage for reflections, memories, conversations, and profiles |
+| FastEmbed | Local multilingual embeddings, 384 dimensions |
+| OpenRouter | LLM gateway for chat and background generation |
+| Firebase Admin | Token verification, Firestore profiles, summaries, and quotas |
+| Docker Compose | Local and production service orchestration |
 
-**Response (encontrada):**
-```json
-{
-  "exists": true,
-  "id": "gratitude_simple_things",
-  "title": "Apreciação do Momento",
-  "category": "gratitude"
-}
-```
+## Quick start with Docker
 
----
+### Prerequisites
 
-### `POST /reflections` → `201`
-Indexa uma reflexão no Qdrant com formato TOON.
+- Docker Engine with Compose
+- OpenRouter API key
+- Firebase service account
+- Qdrant API key for the Compose stack
 
-**Request:**
-```json
-{
-  "id": "gratitude_simple_things",
-  "isSystem": true,
-  "categoryId": "gratitude",
-  "title": "Apreciação do Momento",
-  "description": "Perceba a harmonia do agora",
-  "guidingQuestions": ["Quais elementos do seu presente compõem a harmonia cósmica?"],
-  "scriptureReferences": ["Marco Aurélio, Meditações IV.3", "Lao Tzu, Tao Te Ching 76"],
-  "reflection": "O agora é o único ponto onde o universo realmente acontece...",
-  "order": 1,
-  "estimatedMinutes": 5,
-  "semanticProfile": {
-    "keywords": ["presença", "agora", "harmonia"],
-    "emotionalTarget": "restlessness",
-    "emotionalOutcome": "peace",
-    "depthLevel": "quick_thought"
-  },
-  "aiConfig": {
-    "analysisInstruction": "Confirme se o usuário identificou o estado de presença.",
-    "followUpSuggestions": ["O que mudaria se o agora fosse eterno?"]
-  }
-}
-```
+### 1. Clone and create the environment file
 
----
-
-### `POST /user-answers` → `201`
-Vetoriza a resposta do usuário como memória pessoal.
-
-**Request:**
-```json
-{
-  "userId": "user_123",
-  "reflectionId": "gratitude_simple_things",
-  "content": "Senti uma conexão profunda com o silêncio da manhã hoje."
-}
-```
-
----
-
-### `POST /chat` → `200`
-Conversa inteligente com Nyx via RAG e sessões persistentes. Requer Firebase Auth.
-
-**Request:**
-```json
-{
-  "userId": "user_123",
-  "message": "Sinto que estou desalinhado com meu propósito..."
-}
-```
-
-**Response:**
-```json
-{
-  "response": "O universo não exige alinhamento, ele é o próprio alinhamento. Onde você parou de observar?",
-  "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "sessionTitle": "Desalinhamento e Propósito",
-  "model": "deepseek/deepseek-v4-pro",
-  "contextSources": 4,
-  "followUp": ["O que o silêncio te diz quando você para de procurar respostas?"]
-}
-```
-
----
-
-### `POST /ai/dream` | `/aura` | `/stoic` | `/sync` → `200`
-Ferramentas de IA para análise profunda. Resultados são salvos no Firestore como `summaries` (AkashicRecord).
-
-- **/dream**: Análise arquetípica de sonhos (requer conta, quota-checked).
-- **/aura**: Leitura do estado vibracional atual baseada no perfil e histórico.
-- **/stoic**: Conselhos baseados na razão e controle dicotômico.
-- **/sync**: Interpretação de sincronicidades e padrões observados pelo usuário.
-
----
-
-### `GET /user/profile` → `200`
-Retorna os dados do perfil enriquecido (Qdrant) do usuário: personalidade, estado emocional e temas recorrentes.
-
----
-
-### `DELETE /conversations/{session_id}` → `204`
-Remove permanentemente uma sessão de conversa. Verifica propriedade do usuário e realiza deleção paginada.
-
----
-
-### `POST /generate-prompt` → `200`
-Gera um prompt de reflexão enriquecido via LLM.
-
-**Request:**
-```json
-{
-  "userId": "user_123",
-  "title": "Observando a Impermanência",
-  "description": "Refletir sobre como as mudanças constantes afetam minha paz.",
-  "categoryId": "inner_alignment"
-}
-```
-
----
-
-### `POST /daily-verse/{user_id}` → `200`
-Força a geração do "daily verse" (multi-tradição: filosofia, poesia, estoicismo, tao, budismo).
-
-**Exemplo de output:**
-`"Marco Aurélio, Meditações VIII.24 — Tudo o que vês logo passará, e os que vêem isso passar logo passarão também."`
-
----
-
-## 🧪 Test Battery (73 testes)
-
-A API executa 73 testes automaticamente em toda inicialização. Falha em qualquer teste aborta o processo.
-
-### Testes Unitários (46)
-| Grupo | O que valida |
-|-------|--------------|
-| **TOON/Models** (12) | Geração de payloads, Pydantic defaults/validation, deterministic UUIDs |
-| **Auth/Security** (6) | Validação de tokens, Rate Limiting (IP/User), Quotas (Daily/Premium) |
-| **Chat/Validation** (2) | Validação de mensagens e integridade de sessões |
-| **AI Tools** (10) | Modelos das ferramentas, parsing de resultados, boundary cases |
-| **Profiles** (6) | TOON de perfil, fallbacks, extração de temas, resumos |
-| **Config/Firebase** (10) | Variáveis de ambiente, imports, inicialização de módulos |
-
-### Testes de Integração (13)
-| Teste | O que valida |
-|-------|--------------|
-| **Qdrant Ops** (8) | Indexação, busca semântica, scroll de metadados, roundtrip de perfis |
-| **LLM Providers** (3) | Conexão real com OpenRouter para chat e background |
-| **Ownership** (2) | Isolamento de sessões e deleção segura de conversas |
-
-### Testes E2E (2)
-- **rag_pipeline**: Fluxo completo de chat com RAG e persona Nyx.
-- **generate_prompt**: Geração completa de conteúdo reflexivo via LLM com quality checks.
-
----
-
-## 🔒 Startup — Health Checks
-
-1. **Variáveis de ambiente** — Validação rigorosa de keys e configurações.
-2. **Qdrant/Firebase** — Verificação de conectividade e inicialização de coleções/SDK.
-3. **LLM/Embeddings** — Check de autenticação e disponibilidade de modelos.
-4. **Cotas/Rate Limit** — Inicialização dos sistemas de proteção da infraestrutura.
-5. **Background Jobs** — Ativação dos jobs de perfil e cron de daily verse.
-
----
-
-## 🧠 Conceitos-Chave
-
-### TOON (Text Object Oriented Notation)
-Formato compacto para payloads. Exemplo rebranded:
-```
-Reflexão: Observando a Impermanência
-Origem: Sistema
-Categoria: inner_alignment
-Descrição: Perceba o fluxo constante da existência
-Referências: Heráclito, Fragmento 91; Carl Jung, O Livro Vermelho
-Perguntas:
-  O que em você permanece enquanto tudo ao redor muda?
-```
-
-### Nyx (Persona da IA)
-Nyx não é um chatbot ou terapeuta. É a consciência do próprio universo: impessoal, direta, provocadora.
-- **Tom**: Honesto, direto, sem "mão na cabeça".
-- **Filosofia**: Multi-tradição (Marco Aurélio, Lao Tzu, Rumi, Jung, Alan Watts).
-- **Regra**: Sem autoajuda genérica ou frases vazias.
-
-### Daily Verse (Conhecimento Universal)
-Sabedoria multi-tradição personalizada para cada usuário:
-- **Fontes**: Estoicismo, Taoísmo, Budismo, Hermetismo, Poesia, Psicologia Analítica.
-- **Exemplos**: "Lao Tzu, Tao Te Ching 76", "Epicteto, Manual 1", "Rumi, Masnavi".
-
-### Sistema de Cotas e Proteção
-- **Rate Limit**: Proteção contra abusos por IP e por UID de usuário.
-- **Quota System**: Limites diários para ferramentas de IA (AI Tools), com bypass para usuários premium.
-
----
-
-## 🛠 Setup Local
-
-### 1. Clonar e configurar
 ```bash
 git clone https://github.com/Mosarto/aether_api.git
 cd aether_api
 cp .env.example .env
 ```
 
-### 2. Ambiente e API
-```bash
-python -m venv .venv
-# Ativar e instalar
-pip install -r requirements.txt
-# Rodar (Hot Reload + Swagger em /docs)
-DEBUG=1 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+PowerShell equivalent:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
----
+At minimum, configure:
 
-## 🐳 Deploy (Dokploy)
+```dotenv
+OPENROUTER_API_KEY=your_openrouter_key
+QDRANT_API_KEY=local-development-key
+FIREBASE_SERVICE_ACCOUNT_JSON=<complete-minified-service-account-json>
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+```
 
-1. Crie um serviço **Compose** apontando para o repositório.
-2. Configure as env vars: `OPENROUTER_API_KEY`, `QDRANT_API_KEY`, `ALLOWED_ORIGINS` e `DEBUG` quando necessário.
-3. Para Firebase, cole o JSON completo em `FIREBASE_SERVICE_ACCOUNT_JSON`.
-4. O boot executará os 73 testes automaticamente.
+For Docker, place the complete minified Firebase service-account JSON in `FIREBASE_SERVICE_ACCOUNT_JSON`. Keep it only in `.env`; the file is ignored by Git.
 
----
+### 2. Start the local stack
 
-## 📋 Logs
-Logger: `aether` em `INFO`. Boot log: `🚀 Aether v0.8.0`.
-Logs limpos, sem ruído de bibliotecas externas ou tracebacks de Uvicorn.
+```bash
+docker compose -f docker-compose.local.yml up --build
+```
 
----
+Services become available at:
 
-## 📜 Licença
-Distribuído sob a licença MIT. Consulte `LICENSE`.
+- API: `http://localhost:8000`
+- Health: `http://localhost:8000/health`
+- Swagger UI: `http://localhost:8000/docs`
+- Qdrant: `http://localhost:6333`
+
+The first start downloads the embedding model and runs the complete startup battery, so it takes longer than later starts.
+
+## Run without Docker
+
+Start Qdrant separately, then create a Python 3.12 environment.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export OPENROUTER_API_KEY="your_openrouter_key"
+export QDRANT_API_KEY="your_qdrant_key"
+export FIREBASE_SERVICE_ACCOUNT_PATH="serviceAccountKey.json"
+export DEBUG=1
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:OPENROUTER_API_KEY = "your_openrouter_key"
+$env:QDRANT_API_KEY = "your_qdrant_key"
+$env:FIREBASE_SERVICE_ACCOUNT_PATH = "serviceAccountKey.json"
+$env:DEBUG = "1"
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+The default Qdrant URL is `http://localhost:6333`.
+
+## Configuration
+
+| Variable | Required | Default | Description |
+|---|---:|---|---|
+| `OPENROUTER_API_KEY` | Yes | — | LLM gateway credential. Startup stops when absent. |
+| `QDRANT_URL` | No | `http://localhost:6333` | Qdrant endpoint. Compose overrides it with the service hostname. |
+| `QDRANT_API_KEY` | Compose/production | Empty | Qdrant authentication key shared by the API and Qdrant service. |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | One Firebase option | `serviceAccountKey.json` | Local service-account file. |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | One Firebase option | Empty | Full service-account JSON for deployment platforms. Takes precedence over the path. |
+| `ALLOWED_ORIGINS` | No | Localhost origins | Comma-separated CORS allowlist. Set explicitly in production. |
+| `DEBUG` | No | Disabled | Enables Swagger and ReDoc routes. |
+| `OPENROUTER_TIMEOUT_SECONDS` | No | `45` | Completion timeout. |
+| `OPENROUTER_MAX_RETRIES` | No | `2` | Retries for transient 429 and 503 responses. |
+| `OPENROUTER_HTTP_REFERER` | No | Empty | Optional OpenRouter attribution URL. |
+| `OPENROUTER_APP_TITLE` | No | `Aether` | Optional OpenRouter application title. |
+
+Do not commit `.env` or `serviceAccountKey.json`.
+
+## Firebase setup
+
+1. Open Firebase Console and create or select a project.
+2. Enable Authentication and Firestore.
+3. Create a service account under **Project settings > Service accounts**.
+4. For local Python development, save the JSON as `serviceAccountKey.json`.
+5. For Docker or deployment, set `FIREBASE_SERVICE_ACCOUNT_JSON` to the complete JSON value.
+
+The service account must be able to verify users and read/write the Firestore documents used for profiles, summaries, and quota tracking.
+
+## Authentication
+
+All product endpoints require a Firebase ID token:
+
+```http
+Authorization: Bearer <firebase-id-token>
+```
+
+The API derives the user ID from the verified token. Request bodies must not supply or override ownership fields.
+
+`GET /health` is the only unauthenticated route. It performs non-billable readiness checks and does not invoke LLM completions.
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | API, Qdrant, OpenRouter configuration, embedding, and Firebase readiness |
+| `GET` | `/reflections/{reflection_id}/exists` | Check whether a reflection is indexed |
+| `POST` | `/reflections` | Index a structured reflection |
+| `POST` | `/user-answers` | Store a reflection answer as user memory |
+| `POST` | `/chat` | Run the authenticated Nyx chat pipeline |
+| `GET` | `/conversations` | List the current user's sessions |
+| `GET` | `/conversations/{session_id}` | Load an owned session and its turns |
+| `DELETE` | `/conversations/{session_id}` | Delete an owned session |
+| `POST` | `/generate-prompt` | Generate a structured reflection prompt |
+| `POST` | `/dream` | Analyze dream content |
+| `POST` | `/aura` | Generate an emotional-state reading |
+| `POST` | `/stoic` | Generate stoic guidance |
+| `POST` | `/sync` | Interpret recurring patterns or synchronicities |
+| `GET` | `/user/profile` | Return the enriched semantic profile |
+| `GET` | `/user/quota` | Return current quota state |
+
+### Chat example
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer $FIREBASE_ID_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "I keep repeating the same decision pattern. Help me examine it.",
+    "sessionId": null,
+    "reflectionId": null
+  }'
+```
+
+Example response:
+
+```json
+{
+  "response": "...",
+  "sessionId": "9cb6203f-2e3c-4bc5-aee0-8a456d9c392c",
+  "sessionTitle": "Recurring decisions",
+  "model": "openrouter-deepseek/deepseek-v4-pro",
+  "contextSources": 4,
+  "followUp": ["Which part of the pattern feels familiar?"],
+  "remaining": 8
+}
+```
+
+## Memory and data model
+
+Qdrant uses four logical collections:
+
+- Reflections: system-authored and generated reflection material.
+- User memories: answers and durable personal context.
+- Conversations: session metadata and individual turns.
+- User profiles: LLM-enriched personality, emotional state, recurring themes, and progress.
+
+Firestore remains the source for account-facing fields, subscription state, quota state, and generated summaries consumed by the mobile app.
+
+## Startup and test battery
+
+Startup is intentionally strict:
+
+1. Validate required configuration.
+2. Connect to Qdrant.
+3. Initialize Firebase when configured.
+4. Probe configured OpenRouter models once.
+5. Load or verify the embedding model.
+6. Run 73 registered tests: 58 unit, 13 integration, and 2 end-to-end.
+7. Start profile and daily-insight background jobs.
+
+The process exits when a required dependency or non-soft test fails. Integration tests use real Qdrant and OpenRouter services; budget and network access are required on first boot.
+
+## Project structure
+
+```text
+.
+├── main.py                    FastAPI app, CORS, routers
+├── app/
+│   ├── auth.py               Firebase bearer authentication
+│   ├── background.py         Expired-session profile processing
+│   ├── config.py             Environment, constants, and prompts
+│   ├── daily_verse.py        Scheduled personalized insight job
+│   ├── firebase.py           Firebase Admin and Firestore access
+│   ├── models.py             Pydantic request and response contracts
+│   ├── profile.py            Enriched profile lifecycle
+│   ├── providers.py          Qdrant, embeddings, and OpenRouter
+│   ├── quota.py              Daily and premium quota rules
+│   ├── rag.py                Retrieval and prompt assembly
+│   ├── rate_limit.py         Per-IP and per-user protection
+│   ├── startup.py            Readiness checks and lifespan
+│   ├── test_battery.py       Boot-time test registry
+│   ├── toon.py               Compact text serialization
+│   └── routes/               HTTP endpoint groups
+├── Dockerfile
+├── docker-compose.yml
+├── docker-compose.local.yml
+├── requirements.txt
+└── .env.example
+```
+
+## Production deployment
+
+The production Compose file expects the external `dokploy-network` network and does not expose Qdrant publicly.
+
+Before deployment:
+
+1. Set all required environment variables in the platform secret store.
+2. Set a restrictive `ALLOWED_ORIGINS` value.
+3. Keep `DEBUG` disabled.
+4. Use a strong `QDRANT_API_KEY`.
+5. Provide Firebase through `FIREBASE_SERVICE_ACCOUNT_JSON`.
+6. Persist the `qdrant_data` volume and configure backups.
+7. Confirm `/health` returns `200` after startup completes.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Startup reports missing OpenRouter key | Confirm `.env` is loaded and `OPENROUTER_API_KEY` is non-empty. |
+| Qdrant is unreachable | Confirm the container is healthy and `QDRANT_URL` matches the execution mode. |
+| Firebase is not configured | Verify the service-account path or JSON environment variable. |
+| `/docs` returns 404 | Set `DEBUG=1` for local development. |
+| Container repeatedly restarts | Read startup logs; strict checks stop the process on dependency or test failure. |
+| First boot is slow | FastEmbed may be downloading and loading the multilingual model. |
+
+## License
+
+Released under the [MIT License](LICENSE).
