@@ -2,6 +2,7 @@ import json
 import os
 
 import firebase_admin
+import firebase_admin.auth
 from firebase_admin import credentials, firestore
 
 from app.config import (
@@ -160,6 +161,69 @@ def increment_user_quota(uid: str, date: str) -> bool:
         return True
     except Exception as e:
         logger.warning("Falha ao incrementar quota do usuário %s: %s", uid, e)
+        return False
+
+
+# Subcollections hanging off users/{uid}. Kept explicit so a purge never
+# depends on listing collections at runtime.
+USER_SUBCOLLECTIONS = ("settings", "tracker", "summaries", "chat_sessions", "quota")
+
+
+def _delete_collection(collection_ref, batch_size: int = 200) -> int:
+    """Delete every document of a collection, including nested subcollections."""
+    deleted = 0
+    while True:
+        docs = list(collection_ref.limit(batch_size).stream())
+        if not docs:
+            return deleted
+        for doc in docs:
+            for sub in doc.reference.collections():
+                deleted += _delete_collection(sub, batch_size)
+            doc.reference.delete()
+            deleted += 1
+        if len(docs) < batch_size:
+            return deleted
+
+
+def delete_user_data(uid: str) -> tuple[bool, int]:
+    """Delete users/{uid} and every subcollection below it.
+
+    Returns (ok, documents_deleted). ok is False when Firestore is
+    unavailable or the purge failed, so the caller can refuse to report a
+    successful deletion.
+    """
+    db = get_firestore_db()
+    if not db:
+        logger.error("Exclusão de conta: Firestore indisponível")
+        return False, 0
+
+    user_ref = db.collection("users").document(uid)
+    deleted = 0
+    try:
+        for name in USER_SUBCOLLECTIONS:
+            deleted += _delete_collection(user_ref.collection(name))
+
+        # Catch subcollections created outside the documented schema.
+        for sub in user_ref.collections():
+            deleted += _delete_collection(sub)
+
+        user_ref.delete()
+        deleted += 1
+        return True, deleted
+    except Exception as e:
+        logger.error("Exclusão de conta: falha ao apagar Firestore — %s", e.__class__.__name__)
+        return False, deleted
+
+
+def delete_auth_user(uid: str) -> bool:
+    """Delete the Firebase Auth account. Missing user counts as success."""
+    try:
+        firebase_admin.auth.delete_user(uid)
+        return True
+    except firebase_admin.auth.UserNotFoundError:
+        return True
+    except Exception as e:
+        logger.error("Exclusão de conta: falha ao apagar Auth — %s", e.__class__.__name__)
         return False
 
 

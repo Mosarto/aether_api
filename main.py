@@ -37,7 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=ALLOWED_ORIGINS != ["*"],
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "DELETE"],  # DELETE covers sessions and account deletion
     allow_headers=["*"],
 )
 

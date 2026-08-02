@@ -207,6 +207,7 @@ The API derives the user ID from the verified token. Request bodies must not sup
 | `POST` | `/ai/sync` | Interpret recurring patterns or synchronicities |
 | `GET` | `/user/profile` | Return the enriched semantic profile |
 | `GET` | `/user/quota` | Return current quota state |
+| `DELETE` | `/user/account` | Permanently erase the caller's data (see below) |
 
 When Agnes is unavailable, LLM-backed endpoints answer `503` with body `{"error": "llm_unavailable"}` (wrapped in `detail` by FastAPI) and the quota slot is refunded.
 
@@ -236,6 +237,27 @@ Example response:
   "remaining": 8
 }
 ```
+
+## Account deletion
+
+`DELETE /user/account` erases everything keyed by the caller's uid, which the
+API takes from the verified token — a user can only delete themselves:
+
+| Store | What is removed |
+|---|---|
+| Qdrant `conversations` | Session metadata and every turn |
+| Qdrant `user_memories` | Answers and durable personal context |
+| Qdrant `user_profiles` | The enriched semantic profile |
+| Firestore `users/{uid}` | Document and all subcollections (settings, tracker, summaries, chat_sessions, quota) |
+| Firebase Auth | The account itself, deleted last |
+
+The shared `reflections` catalog is intentionally preserved: it is product
+content consumed by every user, not personal data.
+
+The purge verifies that no points remain and returns `500
+{"error": "account_deletion_incomplete"}` if any store failed, so the client
+never tells a user their data is gone while part of it survives. The operation
+is idempotent — a failed attempt can be retried while the account still exists.
 
 ## Memory and data model
 
