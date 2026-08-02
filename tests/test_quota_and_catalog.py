@@ -277,3 +277,32 @@ def test_chat_response_rejects_negative_remaining():
             response="ok", sessionId="s", model="m",
             contextSources=0, remaining=-1,
         )
+
+
+# --- Akashic date normalization -----------------------------------------------
+
+
+def test_summary_date_is_stored_as_a_timestamp_not_a_string():
+    """The client reads `date` as a Timestamp and orders the archive by it.
+
+    An ISO string lands in a different Firestore type bucket, breaking both
+    parsing and ordering.
+    """
+    from datetime import datetime, timezone
+
+    from app.firebase import _coerce_summary_date
+
+    parsed = _coerce_summary_date("2026-03-14T10:30:00+00:00")
+    assert parsed == datetime(2026, 3, 14, 10, 30, tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    assert _coerce_summary_date(now) is now
+
+
+def test_unparseable_summary_date_falls_back_to_server_timestamp():
+    from google.cloud import firestore
+
+    from app.firebase import _coerce_summary_date
+
+    for bad in ("", "not-a-date", None, 42):
+        assert _coerce_summary_date(bad) is firestore.SERVER_TIMESTAMP

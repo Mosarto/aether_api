@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 
 import firebase_admin
 import firebase_admin.auth
@@ -227,6 +228,25 @@ def delete_auth_user(uid: str) -> bool:
         return False
 
 
+def _coerce_summary_date(value: object):
+    """Normalize a summary date into a value Firestore stores as a Timestamp.
+
+    Callers pass ISO strings, which Firestore keeps as plain strings. The app
+    reads `date` as a Timestamp, and `orderBy('date')` sorts strings in a
+    separate type bucket from real timestamps — so a string here both breaks
+    parsing and scrambles the archive order. Anything unparseable falls back
+    to the server clock so a record is never stored without an ordering key.
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return firestore.SERVER_TIMESTAMP
+
+
 def save_summary_to_firestore(uid: str, summary: dict) -> str | None:
     db = get_firestore_db()
     if not db:
@@ -239,7 +259,7 @@ def save_summary_to_firestore(uid: str, summary: dict) -> str | None:
             "title": summary.get("title", ""),
             "snippet": summary.get("snippet", ""),
             "tags": summary.get("tags", []),
-            "date": summary.get("date", ""),
+            "date": _coerce_summary_date(summary.get("date")),
             "tool": summary.get("tool", ""),
         }
 
