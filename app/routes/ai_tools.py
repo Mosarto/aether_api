@@ -7,6 +7,7 @@ from app.auth import get_current_user
 from app.config import (
     AURA_READING_PROMPT,
     COL_CONVERSATIONS,
+    DAY_ANALYSIS_PROMPT,
     DREAM_ANALYSIS_PROMPT,
     STOIC_ADVICE_PROMPT,
     SYNCHRONICITY_PROMPT,
@@ -136,6 +137,14 @@ async def _process_ai_tool(
 def _require_full_account(user: dict) -> None:
     if user.get("is_anonymous") or user.get("subscription_tier") == "guest":
         raise HTTPException(status_code=403, detail={"error": "ai_tools_require_account", "detail": "Crie uma conta para acessar as ferramentas de IA"})
+
+
+@router.post("/day", response_model=AIToolResponse)
+async def day_analysis(request: AIToolRequest, user: dict = Depends(get_current_user)):
+    _require_full_account(user)
+    await check_rate_limit(user["uid"])
+    await check_quota(user)
+    return await _process_ai_tool(user, request.content, DAY_ANALYSIS_PROMPT, "day", include_profile=True)
 
 
 @router.post("/dream", response_model=AIToolResponse)
