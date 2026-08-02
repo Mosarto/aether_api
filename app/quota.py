@@ -8,6 +8,16 @@ from app.config import DAILY_QUOTA_FREE, DAILY_QUOTA_PREMIUM, QUOTA_TIMEZONE, lo
 from app.firebase import get_firestore_db
 
 
+def public_remaining(value: object) -> int | None:
+    """Normalize an internal remaining counter for client responses.
+
+    Premium quota is stored as -1 (unlimited). Response models constrain
+    `remaining` to ge=0, so negatives must become None (= no limit) instead
+    of failing validation on every premium request.
+    """
+    return value if isinstance(value, int) and value >= 0 else None
+
+
 def _today_brt() -> str:
     """Get today's date string in BRT (America/Sao_Paulo) as YYYY-MM-DD."""
     return datetime.now(ZoneInfo(QUOTA_TIMEZONE)).strftime("%Y-%m-%d")

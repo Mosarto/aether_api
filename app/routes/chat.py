@@ -31,7 +31,7 @@ from app.profile import (
     sync_firebase_fields,
 )
 from app.providers import qdrant
-from app.quota import check_quota, refund_quota
+from app.quota import check_quota, public_remaining, refund_quota
 from app.rag import build_llm_prompt, retrieve_context, sanitize_follow_ups
 from app.rate_limit import check_rate_limit
 from app.routes.conversations import _get_session_meta, _get_session_turns
@@ -142,7 +142,9 @@ async def chat(req: ChatRequest, user: dict = Depends(get_current_user)):
     try:
         await check_rate_limit(user["uid"])
         quota_info = await check_quota(user)
-        quota_remaining = quota_info.get("remaining")
+        # Premium quota is signalled as -1 (unlimited); ChatResponse.remaining
+        # is ge=0, so a negative value would 500 every premium chat.
+        quota_remaining = public_remaining(quota_info.get("remaining"))
         session_id = req.sessionId or str(uuid4())
         now_iso = datetime.now(timezone.utc).isoformat()
 

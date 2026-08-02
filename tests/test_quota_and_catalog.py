@@ -254,3 +254,26 @@ def test_reflection_model_caps_list_fields():
             id="x", categoryId="faith", title="t", description="d",
             guidingQuestions=["q" * 5000],
         )
+
+
+# --- Premium remaining normalization ------------------------------------------
+
+
+def test_public_remaining_maps_premium_sentinel_to_none():
+    from app.quota import public_remaining
+
+    assert public_remaining(-1) is None, "Premium (-1) deve virar None no cliente"
+    assert public_remaining(0) == 0
+    assert public_remaining(4) == 4
+    assert public_remaining(None) is None
+    assert public_remaining("4") is None
+
+
+def test_chat_response_rejects_negative_remaining():
+    from app.models import ChatResponse
+
+    with pytest.raises(ValidationError):
+        ChatResponse(
+            response="ok", sessionId="s", model="m",
+            contextSources=0, remaining=-1,
+        )
