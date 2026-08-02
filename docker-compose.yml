@@ -1,8 +1,12 @@
 services:
   api:
     build: .
-    ports:
-      - "8000:8000"
+    # `expose` (not `ports`): Traefik reaches the container through
+    # dokploy-network. Publishing 8000 on the host would also serve the API
+    # at http://<vps-ip>:8000 — bypassing TLS, with Firebase ID tokens in
+    # cleartext.
+    expose:
+      - "8000"
     environment:
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_API_KEY=${QDRANT_API_KEY}

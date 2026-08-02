@@ -6,3 +6,16 @@ __pycache__/
 dist/
 build/
 .mypy_cache/
+
+# Credentials must never reach an image layer. Dokploy builds from the git
+# clone (where this file is absent), but a local `docker compose build` would
+# otherwise bake the Firebase private key into the image.
+serviceAccountKey.json
+
+.git/
+.gitignore
+.pytest_cache/
+.ruff_cache/
+tests/
+requirements-dev.txt
+.sisyphus/
