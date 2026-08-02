@@ -1,19 +1,29 @@
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 from qdrant_client.http import models as qmodels
 
 from app.config import (
-    COL_CONVERSATIONS, SESSION_TTL_HOURS,
-    PROFILE_JOB_INTERVAL_MINUTES, logger,
-)
-from app.providers import qdrant
-from app.profile import (
-    ensure_profiles_collection, fetch_user_profile,
-    upsert_user_profile, compress_history, extract_profile_updates,
-    extract_akashic_metadata,
+    COL_CONVERSATIONS,
+    PROFILE_JOB_INTERVAL_MINUTES,
+    SESSION_TTL_HOURS,
+    logger,
 )
 from app.firebase import save_summary_to_firestore
+from app.profile import (
+    compress_history,
+    ensure_profiles_collection,
+    extract_akashic_metadata,
+    extract_profile_updates,
+    fetch_user_profile,
+    upsert_user_profile,
+)
+from app.providers import qdrant
+
+# A session that keeps failing (LLM or Firestore) is retried on later job
+# runs, but never forever: after this many attempts it is marked processed
+# without a summary so it stops consuming Agnes quota.
+MAX_PROCESSING_ATTEMPTS = 5
 
 _TRIVIAL_GREETING_TOKENS = {
     "oi", "olá", "ola", "eai", "e aí", "e ai", "fala", "hey",
@@ -86,13 +96,14 @@ def _find_expired_unprocessed_sessions() -> list[dict]:
         return []
 
 
-def _load_session_turns(session_id: str) -> list[dict]:
+def _load_session_turns(session_id: str, user_id: str) -> list[dict]:
     try:
         results, _ = qdrant.scroll(
             collection_name=COL_CONVERSATIONS,
             scroll_filter=qmodels.Filter(
                 must=[
                     qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
+                    qmodels.FieldCondition(key="user_id", match=qmodels.MatchValue(value=user_id)),
                     qmodels.FieldCondition(key="is_session_meta", match=qmodels.MatchValue(value=False)),
                 ],
             ),
@@ -119,7 +130,18 @@ def _mark_session_processed(point_id: str, summary: str):
         logger.warning("Falha ao marcar sessão como processada (%s): %s", point_id, e)
 
 
-def process_finalized_sessions():
+def _record_processing_attempt(point_id: str, attempts: int):
+    try:
+        qdrant.set_payload(
+            collection_name=COL_CONVERSATIONS,
+            payload={"processing_attempts": attempts},
+            points=[point_id],
+        )
+    except Exception as e:
+        logger.warning("Falha ao registrar tentativa de processamento (%s): %s", point_id, e)
+
+
+async def process_finalized_sessions() -> int:
     expired = _find_expired_unprocessed_sessions()
     if not expired:
         return 0
@@ -135,8 +157,17 @@ def process_finalized_sessions():
         if not session_id or not user_id:
             continue
 
+        attempts = int(session_meta.get("processing_attempts", 0) or 0)
+        if attempts >= MAX_PROCESSING_ATTEMPTS:
+            logger.warning(
+                "profile-job: sessão %s excedeu %d tentativas — marcando processada sem summary",
+                session_id[:8], MAX_PROCESSING_ATTEMPTS,
+            )
+            _mark_session_processed(point_id, "")
+            continue
+
         try:
-            turns = _load_session_turns(session_id)
+            turns = _load_session_turns(session_id, user_id)
             if not turns:
                 logger.info("profile-job: sessão %s sem turns, marcando processada", session_id[:8])
                 _mark_session_processed(point_id, "")
@@ -144,14 +175,15 @@ def process_finalized_sessions():
 
             logger.info("profile-job: sessão %s com %d turns", session_id[:8], len(turns))
 
-            summary = compress_history(turns)
+            summary = await compress_history(turns)
             if not summary:
                 logger.warning("profile-job: sessão %s sem summary, mantendo pendente para retry", session_id[:8])
+                _record_processing_attempt(point_id, attempts + 1)
                 continue
 
             create_akashic = _should_create_akashic(turns, summary)
             if create_akashic:
-                akashic_meta = extract_akashic_metadata(summary, len(turns))
+                akashic_meta = await extract_akashic_metadata(summary, len(turns))
                 akashic_payload = {
                     "sessionId": session_id,
                     "title": session_meta.get("title", ""),
@@ -167,6 +199,7 @@ def process_finalized_sessions():
                         "profile-job: falha ao salvar Akashic da sessão %s, mantendo pendente para retry",
                         session_id[:8],
                     )
+                    _record_processing_attempt(point_id, attempts + 1)
                     continue
                 logger.info("profile-job: Akashic %s salvo para sessão %s", summary_id[:8], session_id[:8])
             else:
@@ -176,7 +209,7 @@ def process_finalized_sessions():
                 )
 
             current_profile = fetch_user_profile(user_id)
-            updates = extract_profile_updates(current_profile, summary)
+            updates = await extract_profile_updates(current_profile, summary)
 
             if updates:
                 merged = current_profile or {}
@@ -191,6 +224,7 @@ def process_finalized_sessions():
 
         except Exception as e:
             logger.warning("profile-job: erro sessão %s: %s", session_id[:8], e)
+            _record_processing_attempt(point_id, attempts + 1)
             continue
 
     logger.info("profile-job: %d/%d processadas", processed_count, len(expired))
@@ -203,7 +237,7 @@ async def start_profile_job():
         await asyncio.sleep(PROFILE_JOB_INTERVAL_MINUTES * 60)
         try:
             ensure_profiles_collection()
-            count = process_finalized_sessions()
+            count = await process_finalized_sessions()
             if count > 0:
                 logger.info("profile-job: %d perfis atualizados", count)
         except Exception as e:

@@ -5,13 +5,17 @@ from zoneinfo import ZoneInfo
 from qdrant_client.http import models as qmodels
 
 from app.config import (
-    COL_CONVERSATIONS, DAILY_VERSE_PROMPT,
-    DAILY_VERSE_TIMEZONE, DAILY_VERSE_DELAY_SECONDS, logger,
+    COL_CONVERSATIONS,
+    DAILY_VERSE_DELAY_SECONDS,
+    DAILY_VERSE_PROMPT,
+    DAILY_VERSE_TIMEZONE,
+    logger,
 )
-from app.providers import qdrant, create_background_completion
-from app.profile import fetch_user_profile
 from app.firebase import list_all_users, update_daily_verse
-from app.toon import build_profile_toon, build_conversation_summary_toon
+from app.llm import AgnesError, complete, wrap_untrusted
+from app.profile import fetch_user_profile
+from app.providers import qdrant
+from app.toon import build_conversation_summary_toon, build_profile_toon
 
 BRT = ZoneInfo(DAILY_VERSE_TIMEZONE)
 
@@ -55,52 +59,48 @@ def _fetch_recent_summaries(user_id: str, limit: int = 3) -> list[str]:
         return []
 
 
-def _generate_verse(user_id: str) -> str | None:
+async def _generate_verse(user_id: str) -> str | None:
     profile = fetch_user_profile(user_id)
     summaries = _fetch_recent_summaries(user_id)
 
-    parts = []
-    if profile:
-        parts.append(build_profile_toon(profile))
-    else:
-        parts.append("Perfil: novo usuário, sem dados anteriores.")
+    profile_block = build_profile_toon(profile) if profile else "novo usuário, sem dados anteriores"
 
     if summaries:
-        parts.append("Conversas recentes:")
-        for i, s in enumerate(summaries, 1):
-            toon = build_conversation_summary_toon(s)
-            if toon:
-                parts.append(f"  {i}. {toon}")
+        summaries_block = "\n".join(
+            f"{i}. {build_conversation_summary_toon(s)}" for i, s in enumerate(summaries, 1)
+        )
     else:
-        parts.append("Sem conversas recentes registradas.")
+        summaries_block = "sem conversas recentes registradas"
 
-    user_context = "\n".join(parts)
+    user_context = (
+        f"{wrap_untrusted('perfil_usuario', profile_block)}\n\n"
+        f"{wrap_untrusted('resumo_conversa', summaries_block)}"
+    )
 
     try:
-        content, label = create_background_completion(
+        result = await complete(
+            "daily_verse",
             messages=[
                 {"role": "system", "content": DAILY_VERSE_PROMPT},
                 {"role": "user", "content": user_context},
             ],
-            temperature=0.7,
-            max_tokens=300,
         )
-        verse = content.strip()
+        verse = result.content.strip()
         if verse:
-            logger.debug("daily-verse: %s gerado via %s", user_id, label)
+            logger.debug("daily-verse: verso gerado para %s", user_id)
             return verse
         return None
-    except Exception as e:
+    except AgnesError as e:
         logger.warning("daily-verse: falha ao gerar verso para %s: %s", user_id, e)
         return None
 
 
-def process_single_user(user_id: str, user_data: dict | None = None, force: bool = False) -> bool:
+async def process_single_user(user_id: str, user_data: dict | None = None, force: bool = False) -> bool:
     try:
         if not force and user_data and not _should_update(user_data):
             return False
 
-        verse = _generate_verse(user_id)
+        verse = await _generate_verse(user_id)
         if not verse:
             return False
 
@@ -114,7 +114,7 @@ def process_single_user(user_id: str, user_data: dict | None = None, force: bool
         return False
 
 
-def run_daily_verse_for_all() -> tuple[int, int]:
+async def run_daily_verse_for_all() -> tuple[int, int]:
     users = list_all_users()
     if not users:
         logger.info("daily-verse: nenhum usuário encontrado")
@@ -133,12 +133,11 @@ def run_daily_verse_for_all() -> tuple[int, int]:
             logger.debug("daily-verse: %s já atualizado hoje — pulando", uid)
             continue
 
-        if process_single_user(uid, user_data):
+        if await process_single_user(uid, user_data):
             updated += 1
 
         if i < total:
-            import time
-            time.sleep(DAILY_VERSE_DELAY_SECONDS)
+            await asyncio.sleep(DAILY_VERSE_DELAY_SECONDS)
 
     logger.info("daily-verse: %d/%d atualizados", updated, total)
     return updated, total
@@ -158,7 +157,7 @@ async def start_daily_verse_job():
     while True:
         await asyncio.sleep(wait)
         try:
-            updated, total = run_daily_verse_for_all()
+            updated, total = await run_daily_verse_for_all()
             if updated > 0:
                 logger.info("daily-verse: ciclo completo — %d/%d", updated, total)
         except Exception as e:

@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -7,8 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.auth import get_current_user
 from app.config import (
     AURA_READING_PROMPT,
-    AI_TOOL_LLM_MAX_TOKENS,
-    AI_TOOL_LLM_TEMPERATURE,
     COL_CONVERSATIONS,
     DREAM_ANALYSIS_PROMPT,
     STOIC_ADVICE_PROMPT,
@@ -16,10 +13,18 @@ from app.config import (
     logger,
 )
 from app.firebase import save_summary_to_firestore
+from app.llm import (
+    LLM_UNAVAILABLE_DETAIL,
+    AgnesError,
+    complete_json,
+    was_billed,
+    wrap_untrusted,
+)
+from app.llm_schemas import AIToolResult
 from app.models import AIToolRequest, AIToolResponse
 from app.profile import fetch_user_profile
-from app.providers import create_background_completion, qdrant
-from app.quota import check_quota
+from app.providers import qdrant
+from app.quota import check_quota, refund_quota
 from app.rate_limit import check_rate_limit
 from app.toon import build_profile_toon
 
@@ -54,17 +59,6 @@ def _fetch_recent_session_summaries(uid: str, limit: int = 3) -> list[str]:
         return []
 
 
-def _parse_json_response(raw: str) -> dict:
-    clean = raw.strip()
-    if clean.startswith("```"):
-        first_nl = clean.index("\n") if "\n" in clean else 3
-        clean = clean[first_nl + 1:]
-        if clean.endswith("```"):
-            clean = clean[:-3]
-        clean = clean.strip()
-    return json.loads(clean)
-
-
 async def _process_ai_tool(
     user: dict,
     content: str,
@@ -75,86 +69,52 @@ async def _process_ai_tool(
     """
     Shared processing for all AI tools.
     1. Optionally fetch user profile for context (aura, sync)
-    2. Call LLM (OpenRouter background completion)
-    3. Parse JSON response
-    4. Retry once with lower temperature on parse failure
-    5. Save to Firestore
-    6. Increment quota
-    7. Return AIToolResponse
+    2. Call Agnes through the structured-output helper (single corrective retry)
+    3. Refund the reserved quota slot and return 503 when Agnes fails
+    4. Save to Firestore and return AIToolResponse
     """
-    system_content = prompt
-    user_content = content
+    parts: list[str] = []
 
     if include_profile:
         try:
             profile_data = fetch_user_profile(user["uid"])
             if profile_data:
-                profile_toon = build_profile_toon(profile_data)
-                user_content = f"[Contexto do usuário]\n{profile_toon}\n\n"
+                parts.append(wrap_untrusted("perfil_usuario", build_profile_toon(profile_data)))
 
             recent = _fetch_recent_session_summaries(user["uid"])
             if recent:
-                user_content += "[Conversas recentes]\n" + "\n".join(recent) + "\n\n"
-
-            user_content += f"[Conteúdo]\n{content}"
+                parts.append(wrap_untrusted("conversas_recentes", "\n".join(recent)))
         except Exception as e:
             logger.warning("Falha ao buscar perfil para %s: %s", tool_name, e)
 
+    parts.append(wrap_untrusted("conteudo", content))
+
     messages = [
-        {"role": "system", "content": system_content},
-        {"role": "user", "content": user_content},
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": "\n\n".join(parts)},
     ]
 
-    parsed = None
     try:
-        raw_content, label = create_background_completion(
-            messages=messages,
-            temperature=AI_TOOL_LLM_TEMPERATURE,
-            max_tokens=AI_TOOL_LLM_MAX_TOKENS,
-        )
-        parsed = _parse_json_response(raw_content)
-    except (json.JSONDecodeError, Exception) as first_err:
-        logger.debug("ai-tool %s: retry (1st: %s)", tool_name, str(first_err)[:80])
-        try:
-            raw_content, label = create_background_completion(
-                messages=messages,
-                temperature=0.4,
-                max_tokens=AI_TOOL_LLM_MAX_TOKENS,
-            )
-            parsed = _parse_json_response(raw_content)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=503, detail={"error": "llm_unavailable"})
-        except RuntimeError:
-            raise HTTPException(status_code=503, detail={"error": "llm_unavailable"})
-        except Exception:
-            raise HTTPException(status_code=503, detail={"error": "llm_unavailable"})
-
-    if parsed is None:
-        raise HTTPException(status_code=503, detail={"error": "llm_unavailable"})
+        parsed = await complete_json(tool_name, messages, AIToolResult)
+    except AgnesError as e:
+        logger.warning("ai-tool %s indisponível: %s", tool_name, e)
+        # Only refund when nothing was billed — an invalid completion was paid
+        # for, and refunding it would hand out unlimited free calls.
+        if not was_billed(e):
+            await refund_quota(user)
+        raise HTTPException(status_code=503, detail=LLM_UNAVAILABLE_DETAIL)
 
     response = AIToolResponse(
         id=str(uuid4()),
-        title=parsed.get("title", "Sem título")[:500],
-        snippet=parsed.get("snippet", "")[:8000],
-        tags=parsed.get("tags", [])[:8],
+        title=parsed.title[:500],
+        snippet=parsed.snippet[:8000],
+        tags=parsed.tags,
         date=datetime.now(timezone.utc),
         tool=tool_name,
-        mood=parsed.get("mood"),
-        emotionalIntensity=parsed.get("emotionalIntensity"),
-        keyInsight=parsed.get("keyInsight"),
+        mood=parsed.mood,
+        emotionalIntensity=parsed.emotionalIntensity,
+        keyInsight=parsed.keyInsight or None,
     )
-
-    # Validate mood
-    valid_moods = {"sereno", "ansioso", "esperançoso", "catártico", "melancólico", "empoderado"}
-    if response.mood and response.mood not in valid_moods:
-        response.mood = "sereno"
-
-    # Clamp intensity
-    if response.emotionalIntensity is not None:
-        try:
-            response.emotionalIntensity = round(max(0.0, min(1.0, float(response.emotionalIntensity))), 2)
-        except (TypeError, ValueError):
-            response.emotionalIntensity = None
 
     try:
         save_summary_to_firestore(user["uid"], {
@@ -173,11 +133,14 @@ async def _process_ai_tool(
     return response
 
 
-@router.post("/dream", response_model=AIToolResponse)
-async def dream_analysis(request: AIToolRequest, user: dict = Depends(get_current_user)):
+def _require_full_account(user: dict) -> None:
     if user.get("is_anonymous") or user.get("subscription_tier") == "guest":
         raise HTTPException(status_code=403, detail={"error": "ai_tools_require_account", "detail": "Crie uma conta para acessar as ferramentas de IA"})
 
+
+@router.post("/dream", response_model=AIToolResponse)
+async def dream_analysis(request: AIToolRequest, user: dict = Depends(get_current_user)):
+    _require_full_account(user)
     await check_rate_limit(user["uid"])
     await check_quota(user)
     return await _process_ai_tool(user, request.content, DREAM_ANALYSIS_PROMPT, "dream")
@@ -185,9 +148,7 @@ async def dream_analysis(request: AIToolRequest, user: dict = Depends(get_curren
 
 @router.post("/aura", response_model=AIToolResponse)
 async def aura_reading(request: AIToolRequest, user: dict = Depends(get_current_user)):
-    if user.get("is_anonymous") or user.get("subscription_tier") == "guest":
-        raise HTTPException(status_code=403, detail={"error": "ai_tools_require_account", "detail": "Crie uma conta para acessar as ferramentas de IA"})
-
+    _require_full_account(user)
     await check_rate_limit(user["uid"])
     await check_quota(user)
     return await _process_ai_tool(user, request.content, AURA_READING_PROMPT, "aura", include_profile=True)
@@ -195,9 +156,7 @@ async def aura_reading(request: AIToolRequest, user: dict = Depends(get_current_
 
 @router.post("/stoic", response_model=AIToolResponse)
 async def stoic_advice(request: AIToolRequest, user: dict = Depends(get_current_user)):
-    if user.get("is_anonymous") or user.get("subscription_tier") == "guest":
-        raise HTTPException(status_code=403, detail={"error": "ai_tools_require_account", "detail": "Crie uma conta para acessar as ferramentas de IA"})
-
+    _require_full_account(user)
     await check_rate_limit(user["uid"])
     await check_quota(user)
     return await _process_ai_tool(user, request.content, STOIC_ADVICE_PROMPT, "stoic")
@@ -205,9 +164,7 @@ async def stoic_advice(request: AIToolRequest, user: dict = Depends(get_current_
 
 @router.post("/sync", response_model=AIToolResponse)
 async def sync_reading(request: AIToolRequest, user: dict = Depends(get_current_user)):
-    if user.get("is_anonymous") or user.get("subscription_tier") == "guest":
-        raise HTTPException(status_code=403, detail={"error": "ai_tools_require_account", "detail": "Crie uma conta para acessar as ferramentas de IA"})
-
+    _require_full_account(user)
     await check_rate_limit(user["uid"])
     await check_quota(user)
     return await _process_ai_tool(user, request.content, SYNCHRONICITY_PROMPT, "sync", include_profile=True)

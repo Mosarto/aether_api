@@ -1,11 +1,18 @@
 from datetime import datetime, timezone
+from typing import Annotated
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+
+# The reflections catalog is shared across users and written by clients, and
+# some of its fields reach other users' prompts and UI. Bound every list and
+# item so a single entry cannot carry an oversized payload.
+ShortText = Annotated[str, StringConstraints(max_length=200)]
+MediumText = Annotated[str, StringConstraints(max_length=500)]
 
 
 class SemanticProfile(BaseModel):
-    keywords: list[str] = []
+    keywords: list[ShortText] = Field(default_factory=list, max_length=10)
     emotionalTarget: str = Field(default="", max_length=50)
     emotionalOutcome: str = Field(default="", max_length=50)
     depthLevel: str = Field(default="journaling", max_length=30)
@@ -13,7 +20,7 @@ class SemanticProfile(BaseModel):
 
 class AIConfig(BaseModel):
     analysisInstruction: str = Field(default="", max_length=2000)
-    followUpSuggestions: list[str] = []
+    followUpSuggestions: list[MediumText] = Field(default_factory=list, max_length=5)
 
 
 class ReflectionCreate(BaseModel):
@@ -22,8 +29,8 @@ class ReflectionCreate(BaseModel):
     categoryId: str = Field(max_length=50)
     title: str = Field(max_length=200)
     description: str = Field(max_length=2000)
-    guidingQuestions: list[str] = []
-    scriptureReferences: list[str] = []
+    guidingQuestions: list[MediumText] = Field(default_factory=list, max_length=8)
+    scriptureReferences: list[MediumText] = Field(default_factory=list, max_length=8)
     reflection: str = Field(default="", max_length=8000)
     order: int = 0
     estimatedMinutes: int = 5

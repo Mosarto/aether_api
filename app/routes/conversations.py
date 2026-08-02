@@ -1,12 +1,11 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from qdrant_client.http import models as qmodels
+from qdrant_client.http.exceptions import UnexpectedResponse
 from starlette.responses import Response
 
 from app.auth import get_current_user
-from qdrant_client.http import models as qmodels
-from qdrant_client.http.exceptions import UnexpectedResponse
-
 from app.config import COL_CONVERSATIONS, SESSION_TTL_HOURS, logger
 from app.models import SessionInfo
 from app.providers import qdrant
@@ -22,13 +21,57 @@ def _is_session_active(last_activity_str: str) -> bool:
         return False
 
 
-def _get_session_turns(session_id: str) -> list[dict]:
+def _get_session_meta(session_id: str) -> dict | None:
+    """Load the meta point payload of a session, or None when it doesn't exist.
+
+    Raises on backend errors (other than a missing collection) so ownership
+    checks stay fail-closed: an unreadable meta must never grant access.
+    """
+    try:
+        meta, _ = qdrant.scroll(
+            collection_name=COL_CONVERSATIONS,
+            scroll_filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
+                    qmodels.FieldCondition(key="is_session_meta", match=qmodels.MatchValue(value=True)),
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except UnexpectedResponse as e:
+        if e.status_code == 404:
+            return None
+        raise
+    if not meta:
+        return None
+    payload = dict(meta[0].payload or {})
+    payload["_point_id"] = meta[0].id
+    return payload
+
+
+def _require_owned_session(session_id: str, user_id: str) -> dict:
+    """Return the session meta if it exists AND belongs to user_id.
+
+    Any other case — missing session, missing owner field, other owner —
+    resolves to 404 so session existence is never leaked across users.
+    """
+    meta = _get_session_meta(session_id)
+    if not meta or meta.get("user_id", "") != user_id:
+        raise HTTPException(status_code=404, detail="Sessão não encontrada")
+    return meta
+
+
+def _get_session_turns(session_id: str, user_id: str) -> list[dict]:
+    """Load the turns of a session, always scoped to the owning user."""
     try:
         results, _ = qdrant.scroll(
             collection_name=COL_CONVERSATIONS,
             scroll_filter=qmodels.Filter(
                 must=[
                     qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
+                    qmodels.FieldCondition(key="user_id", match=qmodels.MatchValue(value=user_id)),
                     qmodels.FieldCondition(key="is_session_meta", match=qmodels.MatchValue(value=False)),
                 ]
             ),
@@ -102,38 +145,17 @@ async def list_user_sessions(user: dict = Depends(get_current_user)):
 @router.get("/conversations/{session_id}")
 async def get_session(session_id: str, user: dict = Depends(get_current_user)):
     try:
-        turns = _get_session_turns(session_id)
-        if not turns:
-            raise HTTPException(status_code=404, detail="Sessão não encontrada")
+        meta = _require_owned_session(session_id, user["uid"])
 
+        turns = _get_session_turns(session_id, user["uid"])
         clean_turns = [{"role": t["role"], "content": t["content"], "timestamp": t["timestamp"]} for t in turns]
 
-        title = ""
-        session_user_id = ""
-        try:
-            meta, _ = qdrant.scroll(
-                collection_name=COL_CONVERSATIONS,
-                scroll_filter=qmodels.Filter(
-                    must=[
-                        qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
-                        qmodels.FieldCondition(key="is_session_meta", match=qmodels.MatchValue(value=True)),
-                    ]
-                ),
-                limit=1,
-                with_payload=True,
-                with_vectors=False,
-            )
-            if meta:
-                mp = meta[0].payload or {}
-                title = mp.get("title", "")
-                session_user_id = mp.get("user_id", "")
-        except Exception as e:
-            logger.warning("Falha ao buscar meta da sessão %s: %s", session_id, e)
-
-        if session_user_id and session_user_id != user["uid"]:
-            raise HTTPException(status_code=403, detail="Acesso negado a esta sessão")
-
-        return {"sessionId": session_id, "title": title, "turns": clean_turns, "turnCount": len(clean_turns)}
+        return {
+            "sessionId": session_id,
+            "title": meta.get("title", ""),
+            "turns": clean_turns,
+            "turnCount": len(clean_turns),
+        }
 
     except HTTPException:
         raise
@@ -145,68 +167,27 @@ async def get_session(session_id: str, user: dict = Depends(get_current_user)):
 @router.delete("/conversations/{session_id}", status_code=204)
 async def delete_session(session_id: str, user: dict = Depends(get_current_user)):
     try:
-        # Fetch meta point
-        meta, _ = qdrant.scroll(
-            collection_name=COL_CONVERSATIONS,
-            scroll_filter=qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
-                    qmodels.FieldCondition(key="is_session_meta", match=qmodels.MatchValue(value=True)),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
-            with_vectors=False,
-        )
+        meta = _require_owned_session(session_id, user["uid"])
+        meta_point_id = meta["_point_id"]
 
-        if not meta:
-            raise HTTPException(status_code=404, detail="Sessão não encontrada")
-
-        meta_point = meta[0]
-        meta_payload = meta_point.payload or {}
-        session_user_id = meta_payload.get("user_id", "")
-
-        if session_user_id and session_user_id != user["uid"]:
-            raise HTTPException(status_code=403, detail="Acesso negado a esta sessão")
-
-        # Race protection: mark as processed before deletion
+        # Race protection: mark as processed so the profile job skips it.
         qdrant.set_payload(
             collection_name=COL_CONVERSATIONS,
             payload={"processed": True},
-            points=[meta_point.id],
+            points=[meta_point_id],
         )
 
-        # Paginated deletion of turn points
-        offset = None
-        while True:
-            results, next_offset = qdrant.scroll(
-                collection_name=COL_CONVERSATIONS,
-                scroll_filter=qmodels.Filter(
-                    must=[
-                        qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
-                        qmodels.FieldCondition(key="is_session_meta", match=qmodels.MatchValue(value=False)),
-                    ]
-                ),
-                limit=100,
-                offset=offset,
-                with_payload=False,
-                with_vectors=False,
-            )
-            if not results:
-                break
-            point_ids = [p.id for p in results]
-            qdrant.delete(
-                collection_name=COL_CONVERSATIONS,
-                points_selector=qmodels.PointIdsList(points=point_ids),
-            )
-            offset = next_offset
-            if offset is None:
-                break
-
-        # Delete meta point last
+        # Delete every point of the session (turns + meta) scoped to the owner.
         qdrant.delete(
             collection_name=COL_CONVERSATIONS,
-            points_selector=qmodels.PointIdsList(points=[meta_point.id]),
+            points_selector=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(key="session_id", match=qmodels.MatchValue(value=session_id)),
+                        qmodels.FieldCondition(key="user_id", match=qmodels.MatchValue(value=user["uid"])),
+                    ]
+                )
+            ),
         )
 
         return Response(status_code=204)

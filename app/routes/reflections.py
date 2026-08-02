@@ -1,12 +1,12 @@
-from fastapi import APIRouter, HTTPException, Depends
-
-from app.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException
 from qdrant_client.http import models
 from qdrant_client.http.exceptions import UnexpectedResponse
 
+from app.auth import get_current_user
 from app.config import COL_REFLECTIONS, deterministic_uuid, logger
-from app.models import ReflectionCreate, SemanticProfile, AIConfig
+from app.models import AIConfig, ReflectionCreate, SemanticProfile
 from app.providers import qdrant
+from app.rate_limit import check_rate_limit
 from app.toon import build_reflection_toon
 
 router = APIRouter(tags=["Reflexões"])
@@ -48,7 +48,28 @@ async def check_reflection_exists(reflection_id: str, user: dict = Depends(get_c
 
 @router.post("/reflections", status_code=201)
 async def create_reflection(reflection: ReflectionCreate, user: dict = Depends(get_current_user)):
+    # Writes land in a catalog shared by every user and feed their RAG context,
+    # so this path is rate limited like the LLM ones.
+    await check_rate_limit(user["uid"])
     try:
+        # The reflections catalog is shared across users (seeded idempotently by
+        # clients), so ids are global — but overwriting an entry another user
+        # created is rejected to block cross-user content tampering.
+        point_id = deterministic_uuid(reflection.id)
+        try:
+            existing = qdrant.retrieve(
+                collection_name=COL_REFLECTIONS, ids=[point_id], with_payload=True,
+            )
+        except Exception:
+            existing = []
+        if existing:
+            owner = (existing[0].payload or {}).get("created_by", "")
+            if owner and owner != user["uid"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": "reflection_id_conflict", "id": reflection.id},
+                )
+
         toon = build_reflection_toon(reflection)
         sp = reflection.semanticProfile or SemanticProfile()
         ai = reflection.aiConfig or AIConfig()
@@ -58,6 +79,7 @@ async def create_reflection(reflection: ReflectionCreate, user: dict = Depends(g
             documents=[toon],
             metadata=[{
                 "original_id": reflection.id,
+                "created_by": user["uid"],
                 "is_system": reflection.isSystem,
                 "title": reflection.title,
                 "category": reflection.categoryId,
@@ -71,7 +93,7 @@ async def create_reflection(reflection: ReflectionCreate, user: dict = Depends(g
                 "follow_up": " | ".join(ai.followUpSuggestions),
                 "toon_content": toon,
             }],
-            ids=[deterministic_uuid(reflection.id)],
+            ids=[point_id],
         )
 
         return {
@@ -79,6 +101,8 @@ async def create_reflection(reflection: ReflectionCreate, user: dict = Depends(g
             "id": reflection.id,
             "title": reflection.title,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Erro ao indexar reflexão %s: %s", reflection.id, e)
         raise HTTPException(status_code=500, detail="Erro ao indexar reflexão")

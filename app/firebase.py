@@ -1,10 +1,14 @@
-import os
 import json
+import os
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-from app.config import FIREBASE_SERVICE_ACCOUNT_PATH, FIREBASE_SERVICE_ACCOUNT_JSON, logger
+from app.config import (
+    FIREBASE_SERVICE_ACCOUNT_JSON,
+    FIREBASE_SERVICE_ACCOUNT_PATH,
+    logger,
+)
 
 _firebase_app: firebase_admin.App | None = None
 _firestore_db = None

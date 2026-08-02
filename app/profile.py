@@ -1,14 +1,20 @@
-import json
 from datetime import datetime, timezone
 
-from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.http import models as qmodels
+from qdrant_client.http.exceptions import UnexpectedResponse
 
 from app.config import (
-    COL_USER_PROFILES, COMPRESSION_PROMPT, PROFILE_EXTRACTION_PROMPT,
-    GENDER_INFERENCE_PROMPT, AKASHIC_METADATA_PROMPT, deterministic_uuid, logger,
+    AKASHIC_METADATA_PROMPT,
+    COL_USER_PROFILES,
+    COMPRESSION_PROMPT,
+    GENDER_INFERENCE_PROMPT,
+    PROFILE_EXTRACTION_PROMPT,
+    deterministic_uuid,
+    logger,
 )
-from app.providers import qdrant, create_background_completion
+from app.llm import AgnesError, complete, complete_json, wrap_untrusted
+from app.llm_schemas import AkashicMetadata, ProfileUpdate
+from app.providers import qdrant
 
 ZERO_VECTOR = [0.0] * 384
 
@@ -69,32 +75,31 @@ def upsert_user_profile(user_id: str, profile_data: dict):
     logger.debug("perfil %s atualizado (v%s)", user_id, profile_data.get("version", 1))
 
 
-def _infer_gender(display_name: str) -> str:
+async def infer_gender(display_name: str) -> str:
     if not display_name:
         return "indefinido"
     try:
-        content, _ = create_background_completion(
+        result = await complete(
+            "gender_inference",
             messages=[
                 {"role": "system", "content": GENDER_INFERENCE_PROMPT},
-                {"role": "user", "content": display_name},
+                {"role": "user", "content": wrap_untrusted("dados_usuario", display_name)},
             ],
-            temperature=0,
-            max_tokens=5,
         )
-        raw = content.strip().lower()
+        raw = result.content.strip().lower()
         if "masculino" in raw:
             return "masculino"
         if "feminino" in raw:
             return "feminino"
         return "indefinido"
-    except Exception as e:
-        logger.warning("Falha ao inferir gênero de '%s': %s", display_name, e)
+    except AgnesError as e:
+        logger.warning("Falha ao inferir gênero: %s", e)
         return "indefinido"
 
 
-def create_initial_profile(user_id: str, firebase_data: dict) -> dict:
+async def create_initial_profile(user_id: str, firebase_data: dict) -> dict:
     display_name = firebase_data.get("displayName", "")
-    gender = _infer_gender(display_name)
+    gender = await infer_gender(display_name)
 
     profile_data = {
         "user_id": user_id,
@@ -112,7 +117,7 @@ def create_initial_profile(user_id: str, firebase_data: dict) -> dict:
     }
 
     upsert_user_profile(user_id, profile_data)
-    logger.debug("perfil inicial criado para %s (%s)", user_id, gender)
+    logger.debug("perfil inicial criado para %s", user_id)
     return profile_data
 
 
@@ -133,7 +138,7 @@ def sync_firebase_fields(user_id: str, firebase_data: dict, existing_profile: di
     return existing_profile
 
 
-def compress_history(turns: list[dict]) -> str:
+async def compress_history(turns: list[dict]) -> str:
     if not turns:
         return ""
 
@@ -144,68 +149,53 @@ def compress_history(turns: list[dict]) -> str:
     history_text = "\n".join(lines)
 
     try:
-        content, label = create_background_completion(
+        result = await complete(
+            "history_compression",
             messages=[
                 {"role": "system", "content": COMPRESSION_PROMPT},
-                {"role": "user", "content": f"Histórico:\n{history_text}"},
+                {"role": "user", "content": wrap_untrusted("historico", history_text)},
             ],
-            temperature=0.3,
-            max_tokens=300,
         )
-        logger.debug("histórico comprimido: %d turns → %d chars", len(turns), len(content))
-        return content.strip()
-    except Exception as e:
+        logger.debug("histórico comprimido: %d turns → %d chars", len(turns), len(result.content))
+        return result.content.strip()
+    except AgnesError as e:
         logger.warning("compress_history falhou: %s", e)
         return ""
 
 
-def extract_profile_updates(current_profile: dict | None, conversation_summary: str) -> dict:
+async def extract_profile_updates(current_profile: dict | None, conversation_summary: str) -> dict:
     if not conversation_summary:
         return {}
 
-    profile_text = "Perfil atual: VAZIO (primeira conversa)" if not current_profile else (
-        f"Perfil atual:\n"
-        f"  Personalidade: {current_profile.get('personality_summary', '')}\n"
-        f"  Estado emocional: {current_profile.get('emotional_state', '')}\n"
-        f"  Temas recorrentes: {', '.join(current_profile.get('recurring_themes', []))}\n"
-        f"  Progresso espiritual: {current_profile.get('spiritual_progress', '')}"
+    profile_text = "VAZIO (primeira conversa)" if not current_profile else (
+        f"Personalidade: {current_profile.get('personality_summary', '')}\n"
+        f"Estado emocional: {current_profile.get('emotional_state', '')}\n"
+        f"Temas recorrentes: {', '.join(current_profile.get('recurring_themes', []))}\n"
+        f"Progresso espiritual: {current_profile.get('spiritual_progress', '')}"
+    )
+
+    user_content = (
+        f"{wrap_untrusted('perfil_atual', profile_text)}\n\n"
+        f"{wrap_untrusted('resumo_conversa', conversation_summary)}"
     )
 
     try:
-        content, label = create_background_completion(
+        update = await complete_json(
+            "profile_extraction",
             messages=[
                 {"role": "system", "content": PROFILE_EXTRACTION_PROMPT},
-                {"role": "user", "content": f"{profile_text}\n\nResumo da conversa recente:\n{conversation_summary}"},
+                {"role": "user", "content": user_content},
             ],
-            temperature=0.3,
-            max_tokens=500,
+            schema=ProfileUpdate,
         )
-        logger.debug("perfil extraído: %d chars", len(content))
-
-        clean = content.strip()
-        if clean.startswith("```"):
-            first_nl = clean.index("\n") if "\n" in clean else 3
-            clean = clean[first_nl + 1:]
-            if clean.endswith("```"):
-                clean = clean[:-3]
-            clean = clean.strip()
-
-        result = json.loads(clean)
-
-        if "recurring_themes" in result and isinstance(result["recurring_themes"], list):
-            result["recurring_themes"] = result["recurring_themes"][:8]
-
-        return result
-    except Exception as e:
+        return update.model_dump()
+    except AgnesError as e:
         logger.warning("extract_profile falhou: %s", e)
         return {}
 
 
-VALID_MOODS = {"sereno", "ansioso", "esperançoso", "catártico", "melancólico", "empoderado"}
-
-
-def extract_akashic_metadata(summary: str, turn_count: int) -> dict:
-    """Extract mood, emotional intensity, and key insight from a conversation summary.
+async def extract_akashic_metadata(summary: str, turn_count: int) -> dict:
+    """Extract mood, emotional intensity, and key insight from a session summary.
 
     Returns at minimum {"turnCount": turn_count}. On success also includes
     mood, emotionalIntensity, and keyInsight.
@@ -216,46 +206,19 @@ def extract_akashic_metadata(summary: str, turn_count: int) -> dict:
         return base
 
     try:
-        content, label = create_background_completion(
+        meta = await complete_json(
+            "akashic_metadata",
             messages=[
                 {"role": "system", "content": AKASHIC_METADATA_PROMPT},
-                {"role": "user", "content": f"Resumo da conversa:\n{summary}"},
+                {"role": "user", "content": wrap_untrusted("resumo_conversa", summary)},
             ],
-            temperature=0.3,
-            max_tokens=200,
+            schema=AkashicMetadata,
         )
-        logger.debug("akashic metadata extraído (%s): %d chars", label, len(content))
-
-        clean = content.strip()
-        if clean.startswith("```"):
-            first_nl = clean.index("\n") if "\n" in clean else 3
-            clean = clean[first_nl + 1:]
-            if clean.endswith("```"):
-                clean = clean[:-3]
-            clean = clean.strip()
-
-        result = json.loads(clean)
-
-        mood = result.get("mood", "")
-        if mood not in VALID_MOODS:
-            mood = "sereno"
-
-        intensity = result.get("emotionalIntensity", 0.5)
-        try:
-            intensity = float(intensity)
-            intensity = max(0.0, min(1.0, intensity))
-        except (TypeError, ValueError):
-            intensity = 0.5
-
-        key_insight = result.get("keyInsight", "")
-        if not isinstance(key_insight, str):
-            key_insight = ""
-
-        base["mood"] = mood
-        base["emotionalIntensity"] = round(intensity, 2)
-        base["keyInsight"] = key_insight
-        return base
-
-    except Exception as e:
+    except AgnesError as e:
         logger.warning("extract_akashic_metadata falhou: %s", e)
         return base
+
+    base["mood"] = meta.mood
+    base["emotionalIntensity"] = meta.emotionalIntensity
+    base["keyInsight"] = meta.keyInsight
+    return base

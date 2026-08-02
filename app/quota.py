@@ -86,6 +86,42 @@ async def check_and_reserve_quota(user: dict) -> dict:
     return {"remaining": remaining}
 
 
+async def refund_quota(user: dict) -> None:
+    """Return one reserved slot after the LLM call failed. Best effort.
+
+    Without this, a free user loses quota whenever Agnes is unavailable,
+    because check_and_reserve_quota() charges before the completion runs.
+    """
+    if user.get("subscription_tier") == "premium":
+        return
+
+    uid = user.get("uid", "")
+    db = get_firestore_db()
+    if not db or not uid:
+        return
+
+    today = _today_brt()
+    quota_ref = db.collection("users").document(uid).collection("quota").document("daily")
+
+    @transactional
+    def _decrement(transaction):
+        snapshot = quota_ref.get(transaction=transaction)
+        if not snapshot.exists:
+            return
+        data = snapshot.to_dict() or {}
+        if data.get("date") != today:
+            return
+        used = int(data.get("used", 0))
+        if used <= 0:
+            return
+        transaction.set(quota_ref, {"date": today, "used": used - 1})
+
+    try:
+        _decrement(db.transaction())
+    except Exception as e:
+        logger.warning("Falha ao devolver quota do usuário %s: %s", uid, e)
+
+
 # Keep aliases for backward compatibility with imports
 check_quota = check_and_reserve_quota
 
@@ -129,4 +165,3 @@ async def increment_quota(uid: str) -> None:
     No-op. Quota is now reserved atomically in check_and_reserve_quota().
     Kept for backward compatibility — callers can safely remove this call.
     """
-    pass

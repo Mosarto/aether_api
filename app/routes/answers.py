@@ -1,11 +1,11 @@
-from fastapi import APIRouter, HTTPException, Depends
-
-from app.auth import get_current_user
+from fastapi import APIRouter, Depends, HTTPException
 from qdrant_client.http import models
 
+from app.auth import get_current_user
 from app.config import COL_REFLECTIONS, COL_USER_MEMORIES, deterministic_uuid, logger
 from app.models import UserAnswer
 from app.providers import qdrant
+from app.rate_limit import check_rate_limit
 from app.toon import build_answer_toon
 
 router = APIRouter(tags=["Respostas"])
@@ -13,6 +13,7 @@ router = APIRouter(tags=["Respostas"])
 
 @router.post("/user-answers", status_code=201)
 async def submit_user_answer(answer: UserAnswer, user: dict = Depends(get_current_user)):
+    await check_rate_limit(user["uid"])
     try:
         reflection_title = ""
         try:
@@ -31,6 +32,8 @@ async def submit_user_answer(answer: UserAnswer, user: dict = Depends(get_curren
 
         toon = build_answer_toon(answer, reflection_title)
 
+        # Point id is scoped to the authenticated user: a client-chosen id can
+        # never collide with (and overwrite) another user's memory.
         qdrant.add(
             collection_name=COL_USER_MEMORIES,
             documents=[toon],
@@ -42,7 +45,7 @@ async def submit_user_answer(answer: UserAnswer, user: dict = Depends(get_curren
                 "timestamp": answer.createdAt.timestamp(),
                 "toon_context": toon,
             }],
-            ids=[deterministic_uuid(answer.id)],
+            ids=[deterministic_uuid(f"{user['uid']}:{answer.id}")],
         )
 
         return {

@@ -7,18 +7,23 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import (
-    logger, QDRANT_URL,
-    EMBEDDING_MODEL, COL_REFLECTIONS, COL_USER_MEMORIES, COL_CONVERSATIONS,
-    COL_USER_PROFILES, OPENROUTER_API_KEY,
+    AGNES_STARTUP_PROBE,
+    COL_REFLECTIONS,
+    EMBEDDING_MODEL,
+    QDRANT_URL,
+    logger,
 )
-from app.providers import qdrant, create_chat_completion, create_background_completion
+from app.llm import close_llm_client, complete, init_llm_client, missing_agnes_config
+from app.providers import qdrant
 
-API_VERSION = "0.8.0"
+API_VERSION = "0.9.0"
 
 
 def _check_env_vars():
-    if not OPENROUTER_API_KEY:
-        logger.critical("OPENROUTER_API_KEY ausente")
+    """Validate required configuration without ever printing values."""
+    missing = missing_agnes_config()
+    if missing:
+        logger.critical("Configuração Agnes ausente: %s", ", ".join(missing))
         sys.exit(1)
 
     if os.environ.get("ALLOWED_ORIGINS", "*") == "*":
@@ -26,7 +31,7 @@ def _check_env_vars():
 
 
 def _check_firebase():
-    from app.firebase import initialize_firebase, check_firebase_connection
+    from app.firebase import check_firebase_connection, initialize_firebase
 
     if not initialize_firebase():
         logger.warning("firebase ✗")
@@ -42,7 +47,7 @@ def _check_firebase():
 def _check_qdrant(max_retries: int = 5, delay: int = 3):
     for attempt in range(1, max_retries + 1):
         try:
-            collections = qdrant.get_collections().collections
+            qdrant.get_collections()
             return True
         except Exception as e:
             if attempt < max_retries:
@@ -52,24 +57,22 @@ def _check_qdrant(max_retries: int = 5, delay: int = 3):
                 sys.exit(1)
 
 
-def _check_openrouter() -> list[str]:
-    ok = []
-    probes = (
-        ("openrouter_chat", create_chat_completion),
-        ("openrouter_background", create_background_completion),
-    )
-    for label, create_completion in probes:
-        try:
-            create_completion(
-                [{"role": "user", "content": "ping"}],
-                temperature=0,
-                max_tokens=1,
-            )
-            ok.append(label)
-        except Exception:
-            logger.warning("%s ✗", label)
+async def _probe_agnes() -> bool:
+    """Optional real completion probe (AGNES_STARTUP_PROBE=1). Costs tokens.
 
-    return ok
+    Never logs prompt, response or credentials — only the outcome.
+    """
+    try:
+        await complete(
+            "session_title",
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=1,
+            temperature=0.0,
+        )
+        return True
+    except Exception as e:
+        logger.warning("agnes probe ✗ (%s)", e.__class__.__name__)
+        return False
 
 
 def _check_embedding_model():
@@ -91,27 +94,29 @@ async def lifespan(app: FastAPI):
     _check_env_vars()
     _check_qdrant()
     firebase_ok = _check_firebase()
-    llm_ok = _check_openrouter()
     _check_embedding_model()
 
-    services = ["qdrant"] + llm_ok + (["firebase"] if firebase_ok else []) + ["embedding"]
-    logger.info("%s", "  ".join(f"{s} ✓ " for s in services))
+    init_llm_client()
 
-    from app.test_battery import run_battery
-    report = run_battery()
-    if not report.all_passed:
-        logger.critical("tests failed (%d errors) — aborting", report.failed)
-        sys.exit(1)
+    services = ["qdrant", "agnes:config"] + (["firebase"] if firebase_ok else []) + ["embedding"]
+    if AGNES_STARTUP_PROBE and await _probe_agnes():
+        services.append("agnes:probe")
+    logger.info("%s", "  ".join(f"{s} ✓ " for s in services))
 
     from app.profile import ensure_profiles_collection
     ensure_profiles_collection()
 
     from app.background import start_profile_job
-    asyncio.create_task(start_profile_job())
+    profile_task = asyncio.create_task(start_profile_job())
 
     from app.daily_verse import start_daily_verse_job
-    asyncio.create_task(start_daily_verse_job())
+    verse_task = asyncio.create_task(start_daily_verse_job())
 
     logger.info("✅ ready")
 
-    yield
+    try:
+        yield
+    finally:
+        for task in (profile_task, verse_task):
+            task.cancel()
+        await close_llm_client()

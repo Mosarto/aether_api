@@ -1,14 +1,16 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from app.config import EMBEDDING_MODEL, OPENROUTER_API_KEY
+from app.config import EMBEDDING_MODEL
+from app.llm import missing_agnes_config
 from app.providers import qdrant
 
 router = APIRouter(tags=["Sistema"])
 
 
-def _openrouter_status() -> str:
-    return "configured" if OPENROUTER_API_KEY else "not_configured"
+def _agnes_status() -> str:
+    """Configuration-only readiness — never spends a completion."""
+    return "configured" if not missing_agnes_config() else "not_configured"
 
 
 @router.get("/health")
@@ -22,7 +24,7 @@ async def health():
     except Exception:
         checks["qdrant"] = "offline"
 
-    llm_status = {"openrouter": _openrouter_status()}
+    llm_status = {"agnes": _agnes_status()}
 
     checks["llm"] = llm_status
     checks["embedding"] = EMBEDDING_MODEL
@@ -36,7 +38,7 @@ async def health():
     except Exception:
         checks["firebase"] = "error"
 
-    healthy = checks.get("qdrant") == "ok" and llm_status["openrouter"] == "configured"
+    healthy = checks.get("qdrant") == "ok" and llm_status["agnes"] == "configured"
     checks["status"] = "ok" if healthy else "degraded"
 
     return JSONResponse(content=checks, status_code=200 if healthy else 503)

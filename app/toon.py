@@ -1,4 +1,4 @@
-from app.models import ReflectionCreate, UserAnswer, SemanticProfile
+from app.models import ReflectionCreate, SemanticProfile, UserAnswer
 
 
 def build_reflection_toon(r: ReflectionCreate) -> str:
