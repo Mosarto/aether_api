@@ -285,7 +285,9 @@ def _extract_content(payload: dict[str, Any], use_case: str) -> str:
         )
     if not isinstance(content, str) or not content.strip():
         raise AgnesResponseError(f"resposta Agnes com conteúdo vazio ({use_case})")
-    return content
+    # Models often lead with blank lines; stored raw they render as a large
+    # dead zone at the top of chat bubbles.
+    return content.strip()
 
 
 def get_policy(use_case: str) -> LLMPolicy:
